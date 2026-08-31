@@ -3,6 +3,7 @@ import { initializeApp } from 'firebase/app';
 import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, signInAnonymously, onAuthStateChanged, updateProfile, signOut, sendPasswordResetEmail } from 'firebase/auth';
 import { getFirestore, collection, onSnapshot, addDoc, deleteDoc, updateDoc, doc, setDoc, getDoc, serverTimestamp } from 'firebase/firestore';
 import { getStorage } from 'firebase/storage';
+import { PushNotifications } from '@capacitor/push-notifications';
 import { MapPin, Navigation, Car, User, MessageCircle, ShieldCheck, X, CheckCircle2, Loader2, Trash2, Send, LogOut, Bell, Phone, Mail, Lock, LogIn, AlertCircle, Settings, Moon, Sun, Info, History, Star, Play, CheckSquare, Megaphone, Clock, ChevronLeft, ChevronDown, Wallet, Sparkles, ArrowRight, Crown, Shield, Image as ImageIcon, Camera, Package, Store, ShoppingBag, Plus, Tag, Map, Flag, ThumbsUp, Save } from 'lucide-react';
 
 const firebaseConfig = {
@@ -23,9 +24,8 @@ const USERS_COLLECTION = 'khodni_maak_users';
 const MARKET_COLLECTION_NAME = 'khodni_maak_market';
 const ADMIN_EMAIL = "bassamwaleed2000@gmail.com".toLowerCase();
 
-const CURRENT_APP_VERSION = "v5.0_major_update"; 
+const CURRENT_APP_VERSION = "v5.1_push_fix"; 
 
-// قائمة المحافظات المصرية لتسهيل البحث والإضافة
 const EGYPT_CITIES = [
   "القاهرة", "الجيزة", "الإسكندرية", "القليوبية", "المنوفية", "الغربية", "الدقهلية", 
   "كفر الشيخ", "البحيرة", "الشرقية", "الإسماعيلية", "بورسعيد", "السويس", "دمياط", 
@@ -129,7 +129,7 @@ export default function App() {
   const [messages, setMessages] = useState([]);
   const [myInbox, setMyInbox] = useState([]);
   const [newMessage, setNewMessage] = useState('');
-  const [hoveredStar, setHoveredStar] = useState(0); // للتقييم التفاعلي
+  const [hoveredStar, setHoveredStar] = useState(0);
   const messagesEndRef = useRef(null);
 
   const [newTrip, setNewTrip] = useState({
@@ -152,9 +152,36 @@ export default function App() {
   const [liveTimer, setLiveTimer] = useState('00:00:00');
   const [isLiveTripMinimized, setIsLiveTripMinimized] = useState(false);
 
-  // Profile Edit State
   const [carDetails, setCarDetails] = useState({ type: '', color: '', plate: '' });
   const [isEditingProfile, setIsEditingProfile] = useState(false);
+
+  useEffect(() => {
+    try {
+      PushNotifications.requestPermissions().then(result => {
+        if (result.receive === 'granted') {
+          PushNotifications.register();
+        }
+      });
+
+      PushNotifications.addListener('registration', (token) => {
+        console.log('Push registration success, token: ' + token.value);
+      });
+
+      PushNotifications.addListener('registrationError', (error) => {
+        console.error('Error on registration: ' + JSON.stringify(error));
+      });
+
+      PushNotifications.addListener('pushNotificationReceived', (notification) => {
+        triggerToast(notification.title ? `${notification.title}: ${notification.body}` : 'لديك إشعار جديد!');
+      });
+
+      PushNotifications.addListener('pushNotificationActionPerformed', (notification) => {
+        console.log('Push action performed: ' + JSON.stringify(notification));
+      });
+    } catch (e) {
+      console.log('Push notifications not available on web platform');
+    }
+  }, []);
 
   useEffect(() => {
     try {
@@ -598,7 +625,7 @@ export default function App() {
         ...newTrip,
         userId: user.uid, userName: userData?.name || user.displayName || 'مستخدم', userPhoto: userData?.photoURL || null, userPhone: userData?.phone || '',
         verified: userData?.isVerified || false, rating: userData?.rating || 0, totalRatings: userData?.totalRatings || 0,
-        carDetails: userData?.carDetails || null, // حفظ بيانات السيارة مع الرحلة
+        carDetails: userData?.carDetails || null,
         userCreatedAt: userData?.createdAt || Date.now(), status: 'open', createdAt: serverTimestamp()
       });
       setShowAddModal(false); triggerToast('تم نشر الطلب/الرحلة بنجاح!');
@@ -616,7 +643,7 @@ export default function App() {
       await addDoc(collection(db, MARKET_COLLECTION_NAME), {
         ...newProduct, userId: user.uid, userName: userData?.name || user.displayName || 'مستخدم', userPhoto: userData?.photoURL || null, userPhone: userData?.phone || '', verified: userData?.isVerified || false, status: 'available', createdAt: serverTimestamp()
       });
-      setShowAddProductModal(false); triggerToast('تم عرض المنتج في السوق بنجاح! 🛒');
+      setShowAddProductModal(false); triggerToast('تمت إضافة المنتج في السوق بنجاح! 🛒');
       setNewProduct({ title: '', price: '', desc: '', image: null }); setActiveTab('market');
     } catch (error) { setAlertMsg('حدث خطأ أثناء عرض المنتج.'); } finally { setIsSubmitting(false); }
   };
@@ -632,25 +659,18 @@ export default function App() {
   const handleCancelTripOwner = async (tripId) => {
     if (!user) return;
     try {
-      // 1. قفل الرحلة في الواجهة العامة
       await updateDoc(doc(db, APP_COLLECTION_NAME, tripId), { status: 'cancelled' });
-      
-      // 2. البحث عن كل الشاتات المرتبطة بالرحلة دي عشان نبلغ الركاب
       const relatedChats = myInbox.filter(c => c.tripId === tripId);
-      
       for (const chat of relatedChats) {
         const chatId = chat.chatId;
         const systemText = 'تنبيه: قام صاحب الإعلان بإلغاء الرحلة لظروف طارئة 🚫';
-        
         const updateData = { requestStatus: 'cancelled', lastMessage: systemText, lastSenderId: user.uid, lastMessageTime: Date.now() };
-        
         await setDoc(doc(db, `inbox_${user.uid}`, chatId), updateData, { merge: true });
         if (chat.otherPersonId) {
           await setDoc(doc(db, `inbox_${chat.otherPersonId}`, chatId), updateData, { merge: true });
         }
         await addDoc(collection(db, `chats_${chatId}`), { text: systemText, senderId: 'system', isSystem: true, createdAt: serverTimestamp() });
       }
-      
       triggerToast('تم إلغاء الرحلة وإشعار الركاب.');
     } catch (e) {
       setAlertMsg("حدث خطأ أثناء إلغاء الرحلة.");
@@ -767,7 +787,6 @@ export default function App() {
   const filteredTrips = Array.isArray(realTrips) ? realTrips.filter(t => t && (filterType === 'all' || t.type === filterType) && (searchFrom === 'all' || t.from === searchFrom) && (searchTo === 'all' || t.to === searchTo) && t.status !== 'cancelled') : [];
   filteredTrips.sort((a, b) => safeMillis(b.createdAt) - safeMillis(a.createdAt));
   
-  // فلترة سجل الرحلات الخاصة بي (المنتهية أو الملغية)
   const myHistoryTrips = Array.isArray(realTrips) ? realTrips.filter(t => t && t.userId === user?.uid && (t.status === 'completed' || t.status === 'cancelled')) : [];
   myHistoryTrips.sort((a, b) => safeMillis(b.createdAt) - safeMillis(a.createdAt));
 
@@ -936,7 +955,6 @@ export default function App() {
   return (
     <div dir="rtl" className={`min-h-screen flex flex-col relative transition-colors duration-300 ${bgMain} overflow-x-hidden w-full pb-20`}>
       
-      {/* إشعار الشات الذكي المنبثق */}
       {chatNotification && (!activeChat || activeChat.chatId !== chatNotification.chatId) && (
         <div 
            className="fixed top-20 left-1/2 transform -translate-x-1/2 z-[150] w-11/12 max-w-sm animate-fade-in-down cursor-pointer"
@@ -1077,7 +1095,6 @@ export default function App() {
         </div>
       )}
 
-      {/* مودال سجل الرحلات */}
       {showHistoryModal && (
         <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-md z-[200] flex justify-center items-center p-4">
           <div className={`${bgModal} rounded-3xl w-full max-w-md h-[80vh] shadow-2xl border flex flex-col ${isDarkMode ? 'border-slate-700' : 'border-slate-200'} animate-fade-in-up`}>
@@ -1129,7 +1146,6 @@ export default function App() {
             </div>
             
             <div className={`flex-1 overflow-y-auto p-6 space-y-8 ${isDarkMode ? 'bg-slate-900' : 'bg-slate-50'} custom-scrollbar`}>
-              {/* محتوى لوحة الإدارة */}
               <div className={`p-5 rounded-2xl border ${bgCard}`}>
                 <h3 className="font-bold text-lg mb-4 flex items-center gap-2"><ImageIcon size={18} className="text-indigo-500"/> إدارة شعار التطبيق (Logo)</h3>
                 <div className="flex items-center justify-between gap-4 mb-4">
@@ -1302,7 +1318,6 @@ export default function App() {
               </div>
             </div>
 
-            {/* قوائم البحث بالمحافظات */}
             <div className="flex gap-2 mb-6 max-w-2xl mx-auto">
               <div className={`flex-1 flex items-center px-4 py-3 rounded-full shadow-sm border transition-colors ${isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-white border-slate-200'}`}>
                 <MapPin className="text-indigo-500 ml-2 shrink-0" size={18} />
@@ -1341,7 +1356,7 @@ export default function App() {
                   const isCompleted = trip.status === 'completed';
                   const isInProgress = trip.status === 'in_progress';
                   const isClosedForPublic = (isInProgress || isCompleted) && !isOwner;
-                  const canDelete = isAdmin; // الإلغاء أصبح زرار منفصل لصاحب الرحلة
+                  const canDelete = isAdmin;
                   
                   return (
                   <div key={trip.id} className={`rounded-[1.25rem] p-3.5 shadow-sm hover:shadow-md border relative flex flex-col transition-all duration-300 h-fit ${bgCard}`}>
@@ -1404,7 +1419,6 @@ export default function App() {
                        )}
                     </div>
 
-                    {/* عرض بيانات السيارة لو موجودة */}
                     {trip.carDetails && trip.carDetails.type && (trip.type === 'offer' || trip.type === 'delivery') && (
                       <div className={`mb-3 p-2 rounded-xl text-[9px] font-bold border flex flex-col gap-1 ${isDarkMode ? 'bg-slate-800/50 border-slate-600 text-slate-300' : 'bg-slate-50 border-slate-200 text-slate-600'}`}>
                         <span className="flex items-center gap-1"><Car size={10}/> {trip.carDetails.type} ({trip.carDetails.color})</span>
@@ -1521,7 +1535,6 @@ export default function App() {
                            <div className="flex-1 overflow-hidden">
                             <div className="flex justify-between items-center mb-1">
                               <h4 className={`font-bold text-sm flex flex-col gap-0.5 ${textPrimary}`}>
-                                {/* إظهار خط السير كعنوان رئيسي لو الشات يخص رحلة */}
                                 {chat.tripInfo && chat.tripInfo !== 'system' && !chat.tripInfo.includes('شراء') ? (
                                   <>
                                     <span className="truncate text-indigo-600 dark:text-indigo-400">{chat.tripInfo}</span>
@@ -1552,7 +1565,6 @@ export default function App() {
           </div>
         )}
 
-        {/* --- Tab 4: Profile --- */}
         {activeTab === 'profile' && (
           <div className="animate-fade-in-up max-w-xl mx-auto pb-6">
             <h2 className="text-2xl font-black mb-6 flex items-center gap-2 text-indigo-600 dark:text-indigo-400"><User size={28}/> حسابي والإعدادات</h2>
@@ -1590,7 +1602,6 @@ export default function App() {
                 </div>
               )}
 
-              {/* قسم تعديل بيانات السيارة */}
               {!isGuest && (
                 <div className={`p-5 rounded-2xl border shadow-sm transition-all ${isEditingProfile ? 'ring-2 ring-indigo-500' : ''} ${bgCard}`}>
                   <div className="flex justify-between items-center mb-4">
@@ -1673,7 +1684,6 @@ export default function App() {
 
       </main>
 
-      {/* شريط التحكم العائم الذكي */}
       {priorityLiveTrip && !isGuest && (!activeChat || activeChat.chatId !== priorityLiveTrip.chatId) && (() => {
         const isOwner = priorityLiveTrip.tripOwnerId === user.uid;
         const isActualDriver = (priorityLiveTrip.tripType === 'offer' || priorityLiveTrip.tripType === 'delivery') ? isOwner : !isOwner;
@@ -1711,7 +1721,7 @@ export default function App() {
                   {priorityLiveTrip.requestStatus === 'pending' && isOwner && (
                     <><button onClick={() => handleTripAction('accept', priorityLiveTrip)} className="flex-1 bg-emerald-500 text-white font-bold py-2.5 rounded-xl text-xs shadow hover:bg-emerald-600 flex items-center justify-center gap-1"><CheckCircle2 size={16}/> قبول الطلب</button><button onClick={() => handleTripAction('reject', priorityLiveTrip)} className="flex-1 bg-rose-500 text-white font-bold py-2.5 rounded-xl text-xs shadow hover:bg-rose-600 flex items-center justify-center gap-1"><X size={16}/> رفض</button></>
                   )}
-                  {priorityLiveTrip.requestStatus === 'pending' && !isOwner && (<button onClick={() => handleTripAction('cancel_request', priorityLiveTrip)} className="w-full bg-rose-100 text-rose-600 font-bold py-2.5 rounded-xl text-xs hover:bg-rose-200 transition">إلغاء الطلب</button>)}
+                  {priorityLiveTrip.requestStatus === 'pending' && !isOwner && (<button onClick={() => handleTripAction('cancel_request', priorityLiveTrip)} className="w-full bg-rose-100 text-rose-600 font-bold py-2.5 rounded-xl text-xs shadow hover:bg-rose-200 transition">إلغاء الطلب</button>)}
                   {priorityLiveTrip.requestStatus === 'accepted' && isActualDriver && (<button onClick={() => handleTripAction('start_moving', priorityLiveTrip)} className="w-full bg-indigo-600 text-white font-bold py-2.5 rounded-xl text-xs shadow hover:bg-indigo-700 flex items-center justify-center gap-1"><Navigation size={16}/> تحركت نحو العميل</button>)}
                   {priorityLiveTrip.requestStatus === 'moving' && isActualDriver && (<button onClick={() => handleTripAction('arrive', priorityLiveTrip)} className="w-full bg-orange-500 text-white font-bold py-2.5 rounded-xl text-xs shadow hover:bg-orange-600 flex items-center justify-center gap-1"><MapPin size={16}/> إبلاغ بالوصول</button>)}
                   {priorityLiveTrip.requestStatus === 'arrived' && isActualDriver && (<button onClick={() => handleTripAction('start_trip', priorityLiveTrip)} className="w-full bg-emerald-500 text-white font-bold py-2.5 rounded-xl text-xs shadow hover:bg-emerald-600 flex items-center justify-center gap-1"><Play size={16}/> بدء الرحلة الفعلي</button>)}
@@ -1747,7 +1757,6 @@ export default function App() {
         </div>
       </nav>
 
-      {/* المودالز */}
       {showAddModal && !isGuest && (
         <div className="fixed inset-0 bg-slate-900/70 backdrop-blur-sm z-[150] flex justify-center items-center p-4">
           <div className={`${bgModal} rounded-[1.5rem] w-full max-w-lg shadow-2xl border overflow-hidden ${isDarkMode ? 'border-slate-700' : 'border-slate-100'} animate-fade-in-up`}>
@@ -1864,7 +1873,6 @@ export default function App() {
         </div>
       )}
 
-      {/* شاشة الشات المباشرة مع لوحة التحكم ونظام التقييم */}
       {activeChat && !isGuest && (() => {
          const inboxChat = myInbox.find(c => c && c.chatId === activeChat.chatId) || {};
          const chatInfo = { ...activeChat, ...inboxChat };
@@ -1897,7 +1905,6 @@ export default function App() {
                 )}
                 <div className="flex-1 overflow-hidden">
                   <h3 className="font-bold text-sm leading-tight flex items-center gap-1 truncate">
-                    {/* تحديث عنوان الشات بناءً على طلبك */}
                     {activeChat.tripInfo && activeChat.tripInfo !== 'system' && !activeChat.tripInfo.includes('شراء') ? (
                        <span className="truncate">{activeChat.tripInfo}</span>
                     ) : (
@@ -1914,7 +1921,6 @@ export default function App() {
                 </div>
               </div>
 
-              {/* لوحة تحكم الشات */}
               {chatInfo.tripInfo !== 'system' && !chatInfo.tripInfo?.includes('مهتم بشراء') && chatInfo.tripType !== 'market' && user && chatInfo.tripOwnerId && (
                 <div className={`p-3 border-b text-center shadow-sm z-10 ${isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-slate-50 border-slate-200'}`}>
                   
@@ -1938,7 +1944,6 @@ export default function App() {
                     </div>
                   )}
 
-                  {/* أزرار السائق فقط */}
                   {reqStatus === 'accepted' && isActualDriver && (
                      <button onClick={() => handleTripAction('start_moving')} className="w-full bg-indigo-600 text-white font-bold py-2 rounded-xl text-sm shadow hover:bg-indigo-700 flex items-center justify-center gap-1.5"><Navigation size={16}/> تحركت نحو العميل 🚙</button>
                   )}
@@ -1952,7 +1957,6 @@ export default function App() {
                      <button onClick={() => handleTripAction('complete')} className="w-full bg-rose-600 text-white font-bold py-2 rounded-xl text-sm shadow hover:bg-rose-700 flex items-center justify-center gap-1.5"><Flag size={16}/> إنهاء الرحلة 🏁</button>
                   )}
 
-                  {/* نصوص الراكب فقط */}
                   {!isActualDriver && ['accepted', 'moving', 'arrived', 'in_progress_trip'].includes(reqStatus) && (
                     <div className="flex justify-between items-center px-2">
                       <span className={`text-xs font-bold ${reqStatus === 'arrived' ? 'text-rose-500' : 'text-emerald-500'}`}>
@@ -1975,7 +1979,6 @@ export default function App() {
                         <div className={`p-3 rounded-xl mt-1 shadow-inner border ${isDarkMode ? 'bg-slate-800/80 border-slate-700' : 'bg-slate-50 border-slate-200'}`}>
                           <p className="text-xs font-bold mb-3 text-center">ما تقييمك لـ {chatInfo.otherPersonName} في هذه الرحلة؟</p>
                           <div className="flex justify-center gap-1.5" dir="ltr" onMouseLeave={() => setHoveredStar(0)}>
-                            {/* تحديث نظام التقييم التفاعلي */}
                             {[1, 2, 3, 4, 5].map((star) => (
                               <button 
                                 key={star} 
