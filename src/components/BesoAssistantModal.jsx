@@ -1,18 +1,17 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { collection, addDoc, onSnapshot, serverTimestamp } from 'firebase/firestore';
 import { X, Send, Bot, Sparkles, BusFront, Compass, ChevronLeft, Edit3, PlusCircle } from 'lucide-react';
-import { db, ADMIN_EMAIL } from '../firebase';
-import { normalizeArabic } from '../App';
+import { db, ADMIN_EMAIL, LINKS_COLLECTION } from '../firebase';
 import { getPlaceCoords, getDistanceKm } from '../utils/helpers';
 
-// الردود الحوارية الأساسية فقط (بدون أي داتا مواصلات ثابتة أو قديمة)
+// الردود الحوارية الأساسية فقط (أي داتا مواصلات بتيجي من الخريطة الحية)
 const BESO_CONVERSATIONAL_INTENTS = [
   {
     id: 'greeting',
     keywords: ['اهلا', 'سلام عليكم', 'السلام عليكم', 'صباح الخير', 'مساء الخير', 'ازيك', 'عامل ايه', 'اخبارك', 'مرحبا', 'هاي', 'الو', 'يا بيسو'],
     replies: [
-      `أهلاً بيك يا بطل في "طريقنا"! 👋🤖\nأنا "بيسو"، قولي مكانك فين ورايح فين وهطلعلك خط السير أو نقطة التبديل من داتا الخريطة الحية فوراً!`,
+      `أهلاً بيك يا بطل في "طريقنا"! 👋🤖\nأنا "بيسو"، قولي مكانك فين ورايح فين وهطلعلك أسرع وأرخص طريق من خريطة المواقف الحية!`,
       `وعليكم السلام ورحمة الله! يا مرحب بيك في "طريقنا" 🚀.. اكتبلي (من كذا لـ كذا) وهجبلك المواصلة بالتفصيل.`
     ]
   },
@@ -20,7 +19,7 @@ const BESO_CONVERSATIONAL_INTENTS = [
     id: 'app_purpose',
     keywords: ['هدف التطبيق', 'فكره التطبيق', 'فكرة التطبيق', 'يعني ايه طريقنا', 'ابلكيشن ايه ده', 'بيعمل ايه', 'لازمته ايه', 'فكرته ايه', 'شرح التطبيق', 'عن التطبيق'],
     replies: [
-      `فكرة "طريقنا" ببساطة 🎯:\n1️⃣ **مشاركة المشاوير:** كباتن وركاب في نفس الطريق بيوفروا مصاريف المشوار.\n2️⃣ **توصيل الأمانات 📦:** شحن سريع مع مسافرين في نفس اليوم.\n3️⃣ **خريطة المواقف والنقاط التبادلية 🚏:** دليل حي للمواقف ونقاط التبديل (الترانزيت) والتعريفة لحظة بلحظة!`
+      `فكرة "طريقنا" ببساطة 🎯:\n1️⃣ **مشاركة المشاوير:** كباتن وركاب في نفس الطريق بيوفروا مصاريف المشوار.\n2️⃣ **توصيل الأمانات 📦:** شحن سريع مع مسافرين في نفس اليوم.\n3️⃣ **خريطة المواقف والنقاط التبادلية 🚏:** دليل حي للمواقف ونقاط التبديل والتعريفة، وأنا بحسبلك أسرع وأرخص طريق بينها!`
     ]
   },
   {
@@ -33,11 +32,334 @@ const BESO_CONVERSATIONAL_INTENTS = [
   }
 ];
 
-const STOP_WORDS = ['من', 'الي', 'الى', 'ل', 'لحد', 'عند', 'في', 'انا', 'عايز', 'اروح', 'رايح', 'مواصلات', 'طريق', 'خط', 'موقف', 'ازاي', 'اركب', 'ايه'];
+// ==ENGINE_START==
+/* ===================================================================
+   محرك بيسو: بحث ذكي عن الأماكن + رسم بياني للشبكة + أقصر/أرخص مسار
+   (دوال نقية بدون React، بتاخد المواقف والروابط وترجع إجابات)
+   =================================================================== */
+const toNum = (v) => { if (v === null || v === undefined || v === '') return null; const n = Number(v); return Number.isFinite(n) ? n : null; };
+
+const norm = (s) => String(s ?? '')
+  .replace(/[٠-٩]/g, d => '٠١٢٣٤٥٦٧٨٩'.indexOf(d))
+  .replace(/[\u064B-\u065F\u0670\u0640]/g, '')
+  .replace(/[أإآٱ]/g, 'ا').replace(/ى/g, 'ي').replace(/ة/g, 'ه').replace(/ؤ/g, 'و').replace(/ئ/g, 'ي')
+  .toLowerCase()
+  .replace(/[،؟؛]/g, ' ')
+  .replace(/[^\u0600-\u06FFa-z0-9\s]/g, ' ')
+  .replace(/\s+/g, ' ').trim();
+
+// كلمات مش بتحدد مكان (بتتشال من اسم المكان المطلوب)
+const STOP = new Set(['من', 'الي', 'الى', 'ل', 'لحد', 'عند', 'في', 'ف', 'انا', 'عايز', 'عاوز', 'اروح', 'هروح', 'رايح', 'رايحه',
+  'مواصلات', 'خط', 'ازاي', 'اركب', 'ايه', 'ده', 'دي', 'لو', 'ممكن', 'يا', 'بيسو', 'كام', 'بكام', 'اجره', 'سعر', 'تعريفه',
+  'اقرب', 'اسرع', 'ارخص', 'اوفر', 'اقصر', 'تبديل', 'مباشر', 'بدون', 'غير', 'وقت', 'اقل', 'طريق', 'ليا', 'لي', 'مني', 'وصلني', 'وديني', 'طيب', 'هل', 'عشان']);
+// كلمات عامة وزنها قليل في المطابقة
+const GENERIC = new Set(['ميدان', 'موقف', 'محطه', 'مدينه', 'منطقه', 'حي', 'تقاطع', 'بوابه', 'مدخل', 'محور', 'شارع', 'نقطه', 'سلم', 'مواقف']);
+const FILL = new Set(['يا', 'بيسو', 'ممكن', 'لو', 'سمحت', 'عايز', 'عاوز', 'انا', 'ازاي', 'هل', 'طيب', 'يعني', 'بقي', 'عشان', 'مواصلات', 'موصلات',
+  'اركب', 'اروح', 'هروح', 'رايح', 'رايحه', 'اسافر', 'وصلني', 'وديني', 'روح', 'كام', 'بكام', 'اجره', 'سعر', 'تعريفه', 'مكاني', 'موجود', 'واقف', 'متواجد', 'قاعد', 'خط', 'ايه']);
+const MARK = new Set(['الي', 'الى', 'لحد', 'رايح', 'رايحه', 'اروح', 'هروح', 'اسافر', 'اتجاه', 'ل', 'وجهتي']);
+
+// أسماء تانية للأماكن (لهجات/أسماء شائعة) → كلمات بحث إضافية
+const ALIASES = [
+  ['ابني بيتك', 'حدائق اكتوبر'], ['دهشور', 'حدائق اكتوبر'], ['فيوم', 'حدائق اكتوبر'],
+  ['واحات', 'مول مصر'], ['واحات', 'دريم لاند'], ['msa', 'جامعه 6 اكتوبر'], ['ام اس ايه', 'جامعه 6 اكتوبر'],
+  ['هايبر', 'هايبر وان'], ['دائري', 'المريوطيه'], ['مريوطيه', 'سلم المريوطيه'], ['نصر', 'مدينه نصر'],
+  ['رابعه', 'مدينه نصر'], ['تجمع', 'التجمع الخامس'], ['قاهره جديده', 'التجمع الخامس'], ['عاصمه', 'العاصمه الاداريه'],
+  ['مطار', 'مطار القاهره'], ['اهرامات', 'منطقه الاهرام'], ['هرم', 'منطقه الاهرام'], ['جيزه', 'ميدان الجيزه'],
+  ['وسط البلد', 'ميدان التحرير'], ['وسط البلد', 'ميدان رمسيس'], ['قاهره', 'ميدان التحرير'], ['قاهره', 'ميدان رمسيس'],
+  ['مهندسين', 'ميدان لبنان'], ['روكسي', 'مصر الجديده'], ['مصر الجديده', 'روكسي'], ['سادس', 'ليله القدر'],
+  ['october', 'اكتوبر'], ['zayed', 'زايد'], ['cairo', 'القاهره'], ['giza', 'الجيزه'], ['صحراوي', 'محور 26 يوليو'],
+  ['كوبري 26', 'محور 26 يوليو'], ['محطه مصر', 'ميدان رمسيس'], ['شبرا', 'شبرا الخيمه'], ['عباسيه', 'ميدان العباسيه'], ['حدائق الاهرام', 'بوابه خوفو']
+];
+
+const lev = (a, b) => {
+  if (a === b) return 0;
+  const m = a.length, n = b.length;
+  if (!m) return n; if (!n) return m;
+  let prev = Array.from({ length: n + 1 }, (_, i) => i);
+  for (let i = 1; i <= m; i++) {
+    const cur = [i];
+    for (let j = 1; j <= n; j++) cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    prev = cur;
+  }
+  return prev[n];
+};
+
+const stem = (t) => {
+  if (t.length > 5 && (t.startsWith('بال') || t.startsWith('وال') || t.startsWith('فال'))) return t.slice(3);
+  if (t.length > 4 && (t.startsWith('ال') || t.startsWith('لل'))) return t.slice(2);
+  return t;
+};
+const tokenize = (s, dropStops = true) => norm(s).split(' ').filter(Boolean).map(stem)
+  .filter(t => (t.length > 1 || /\d/.test(t)) && !(dropStops && STOP.has(t)));
+
+// تطابق كلمتين: تام / بداية-نهاية (يغطي ل و ب الملزوقة) / غلطة إملائية
+const tokenMatch = (a, b) => {
+  if (a === b) return 1;
+  const la = a.length, lb = b.length;
+  if (la >= 3 && lb >= 3 && Math.abs(la - lb) <= 3 && (a.endsWith(b) || b.endsWith(a) || a.startsWith(b) || b.startsWith(a))) return 0.9;
+  if (la >= 4 && lb >= 4) { const d = lev(a, b); if (d <= 1 || (la >= 7 && lb >= 7 && d <= 2)) return 0.8; }
+  return 0;
+};
+const tokW = (t) => GENERIC.has(t) ? 0.3 : (/^\d+$/.test(t) ? 0.6 : 1);
+const coverage = (qT, tT) => {
+  if (!qT.length || !tT.length) return 0;
+  let tot = 0, hit = 0;
+  qT.forEach(q => { const w = tokW(q); tot += w; let best = 0; tT.forEach(t => { const m = tokenMatch(q, t); if (m > best) best = m; }); hit += w * best; });
+  return tot ? hit / tot : 0;
+};
+
+const coordsOf = (st) => {
+  const la = Number(st?.lat), ln = Number(st?.lng);
+  if (Number.isFinite(la) && Number.isFinite(ln) && (la || ln)) return [la, ln];
+  try { const c = getPlaceCoords(st); if (Array.isArray(c) && Number.isFinite(c[0]) && Number.isFinite(c[1])) return c; } catch (e) { /* ignore */ }
+  return null;
+};
+const distKm = (a, b) => (a && b) ? getDistanceKm(a[0], a[1], b[0], b[1]) : null;
+
+const wantsPref = (nq) => {
+  if (/(ارخص|اوفر|اقل تكلفه|توفير)/.test(nq)) return 'cheap';
+  if (/(بدون تبديل|من غير تبديل|مباشر|بدون تغيير)/.test(nq)) return 'direct';
+  if (/(اسرع|اقصر|اقل وقت|بسرعه)/.test(nq)) return 'fast';
+  return null;
+};
+
+function createEngine(stations, links, isAdmin) {
+  const byId = new Map(stations.map(s => [s.id, s]));
+  const tok = new Map(stations.map(s => [s.id, { name: tokenize(s.name, false), loc: tokenize(s.location, false), hint: tokenize(s.transferHint, false) }]));
+  const coord = new Map(stations.map(s => [s.id, coordsOf(s)]));
+  const nameIdx = new Map(stations.map(s => [norm(s.name), s]));
+  const okStatus = (st) => !st || st === 'approved' || (isAdmin && st === 'pending');
+
+  // ---------- بناء الرسم البياني ----------
+  const adj = new Map(stations.map(s => [s.id, []]));
+  const edgeKeys = new Set();
+  const estMinutes = (a, b) => { const d = distKm(coord.get(a), coord.get(b)); return d == null ? 20 : Math.max(5, Math.round(d / 22 * 60 + 4)); };
+  const addEdge = (from, to, data) => {
+    const key = from + '>' + to;
+    if (from === to || edgeKeys.has(key) || !adj.has(from)) return;
+    edgeKeys.add(key);
+    adj.get(from).push({ from, to, ...data });
+  };
+  (links || []).forEach(l => {
+    if (!l || !byId.has(l.fromId) || !byId.has(l.toId) || !okStatus(l.status)) return;
+    const fare = toNum(l.fare);
+    const base = { fare, minutes: toNum(l.minutes) ?? estMinutes(l.fromId, l.toId), kind: l.kind || 'ride', note: l.note || '' };
+    addEdge(l.fromId, l.toId, base);
+    if (!l.oneWay) addEdge(l.toId, l.fromId, base);
+  });
+  // احتياطي: لو الروابط مش متسجلة، نبني الشبكة من خطوط كل موقف (routes)
+  stations.forEach(s => (s.routes || []).forEach(r => {
+    if (!okStatus(r.status)) return;
+    const t = nameIdx.get(norm(r.destinationDetails || ''));
+    if (!t) return;
+    addEdge(s.id, t.id, { fare: toNum(r.fare), minutes: estMinutes(s.id, t.id), kind: 'ride', note: '' });
+  }));
+
+  // ---------- تحليل اسم مكان ----------
+  const cache = new Map();
+  const resolve = (text) => {
+    const key = norm(text);
+    if (cache.has(key)) return cache.get(key);
+    const qT = tokenize(text);
+    let out = null;
+    if (qT.length && !qT.every(t => GENERIC.has(t))) {
+      const queries = [{ q: qT, f: 1 }];
+      ALIASES.forEach(([k, v]) => {
+        const kT = tokenize(k, false);
+        if (kT.length && kT.every(kt => qT.some(q => tokenMatch(q, kt) >= 0.9))) queries.push({ q: tokenize(v, false), f: 0.85 });
+      });
+      const scored = stations.map(st => {
+        const T = tok.get(st.id); let s = 0;
+        queries.forEach(({ q, f }) => { const v = f * Math.max(coverage(q, T.name), 0.92 * coverage(q, T.loc), 0.5 * coverage(q, T.hint)); if (v > s) s = v; });
+        return { st, score: s };
+      }).sort((a, b) => b.score - a.score);
+      const best = scored[0]?.score || 0;
+      if (best >= 0.6) {
+        out = { text, score: best, candidates: scored.filter(x => x.score >= Math.max(0.6, best * 0.88)).slice(0, 8) };
+      } else {
+        out = { text, score: best, candidates: [], suggestions: scored.filter(x => x.score >= 0.3).slice(0, 3).map(x => x.st) };
+        // محاولة أخيرة: إحداثيات المكان لو الدالة بتعرفه فعلاً (مش قيمة افتراضية)
+        try {
+          const c = getPlaceCoords(text), probe = getPlaceCoords('zzzxqjw');
+          if (Array.isArray(c) && Number.isFinite(c[0]) && Number.isFinite(c[1]) && !(probe && probe[0] === c[0] && probe[1] === c[1])) {
+            const near = stations.map(st => ({ st, d: distKm(c, coord.get(st.id)) })).filter(x => x.d != null && x.d <= 6).sort((a, b) => a.d - b.d).slice(0, 3);
+            if (near.length) out = { text, score: 0.6, approx: true, candidates: near.map(x => ({ st: x.st, score: 0.6 })) };
+          }
+        } catch (e) { /* ignore */ }
+      }
+    }
+    cache.set(key, out);
+    return out;
+  };
+
+  const labelOf = (res) => {
+    if (!res) return '';
+    if (res.label) return res.label;
+    const c = res.candidates || [];
+    if (c.length === 1) return c[0].st.name;
+    if (c.length > 1) {
+      const freq = {};
+      c.forEach(x => { freq[x.st.location] = (freq[x.st.location] || 0) + 1; });
+      const [loc, n] = Object.entries(freq).sort((a, b) => b[1] - a[1])[0];
+      if (n >= 2 && n >= c.length / 2) return loc;
+    }
+    return c[0]?.st.name || res.text;
+  };
+
+  // ---------- تحليل الجملة: (من) و(إلى) ----------
+  const isNoise = (t) => {
+    const s = stem(t);
+    if (MARK.has(s) || FILL.has(s) || STOP.has(s)) return true;
+    return t.startsWith('و') && (MARK.has(t.slice(1)) || FILL.has(t.slice(1)));
+  };
+  const clean = (arr) => { const a = [...arr]; while (a.length && isNoise(a[0])) a.shift(); while (a.length && isNoise(a[a.length - 1])) a.pop(); return a; };
+  const mk = (arr) => { const c = clean(arr); return c.length ? resolve(c.join(' ')) : null; };
+  const isAttachedL = (t) => !!t && t.startsWith('ل') && !MARK.has(t) && t.length > 3;
+
+  const parse = (text) => {
+    const toks = norm(text).split(' ').filter(Boolean);
+    let oi = -1;
+    for (let i = 0; i < toks.length; i++) {
+      if (toks[i] === 'من') { oi = i; break; }
+      if ((toks[i] === 'في' || toks[i] === 'ف') && toks[i - 1] === 'انا') { oi = i; break; }
+      if (['مكاني', 'موجود', 'واقف', 'متواجد', 'قاعد'].includes(toks[i])) { oi = (toks[i + 1] === 'في' || toks[i + 1] === 'ف') ? i + 1 : i; break; }
+    }
+    if (oi >= 0) {
+      const beforeClean = clean(toks.slice(0, oi));
+      const after = toks.slice(oi + 1);
+      if (beforeClean.length) return { origin: mk(after), dest: mk(beforeClean) };      // "رايح الحصري من الدقي"
+      let best = null;
+      for (let k = 1; k <= after.length; k++) {
+        const left = clean(after.slice(0, k));
+        if (!left.length) continue;
+        const L = resolve(left.join(' '));
+        if (!L || L.score < 0.6) continue;
+        let cand;
+        if (k === after.length) cand = { o: L, d: null, sc: L.score - 0.05 };
+        else {
+          const right = clean(after.slice(k));
+          if (!right.length) continue;
+          const R = resolve(right.join(' '));
+          const bonus = MARK.has(stem(after[k])) || isNoise(after[k]) ? 0.25 : (isAttachedL(after[k]) ? 0.12 : 0);
+          cand = { o: L, d: R, sc: L.score + (R ? R.score : 0) + bonus };
+        }
+        if (!best || cand.sc > best.sc) best = cand;
+      }
+      if (best) return { origin: best.o, dest: best.d };
+      return { origin: mk(after), dest: null };
+    }
+    // مفيش "من": دور على علامة وجهة
+    let mi = -1;
+    toks.forEach((t, i) => { if (MARK.has(t) && t !== 'ل') mi = i; });
+    if (mi < 0) toks.forEach((t, i) => { if (t === 'ل') mi = i; });
+    if (mi >= 0) { const d = mk(toks.slice(mi + 1)); if (d) return { origin: null, dest: d }; }
+    const c = clean(toks);
+    const full = c.length ? resolve(c.join(' ')) : null;
+    if (c.length >= 2 && !(full && full.score >= 0.95)) {
+      let best = null;
+      for (let k = 1; k < c.length; k++) {
+        const L = resolve(c.slice(0, k).join(' ')), R = resolve(c.slice(k).join(' '));
+        if (!L || !R || L.score < 0.8 || R.score < 0.8 || !L.candidates.length || !R.candidates.length) continue;
+        if (L.candidates[0].st.id === R.candidates[0].st.id) continue;
+        const sc = L.score + R.score + (isAttachedL(c[k]) ? 0.12 : 0);
+        if (!best || sc > best.sc) best = { o: L, d: R, sc };
+      }
+      if (best) return { origin: best.o, dest: best.d };
+    }
+    return { place: full };
+  };
+
+  // ---------- أقصر مسار (Dijkstra متعدد المصادر والأهداف) ----------
+  const search = (sources, targets, costFn) => {
+    const dist = new Map(), prev = new Map(), done = new Set();
+    sources.forEach(s => { dist.set(s.id, s.init); prev.set(s.id, null); });
+    for (;;) {
+      let u = null, best = Infinity;
+      for (const [k, v] of dist) if (!done.has(k) && v < best) { best = v; u = k; }
+      if (u === null) return null;
+      done.add(u);
+      if (targets.has(u)) {
+        const edges = []; let cur = u;
+        while (prev.get(cur)) { const p = prev.get(cur); edges.unshift(p.edge); cur = p.from; }
+        return edges;
+      }
+      for (const e of (adj.get(u) || [])) {
+        const nd = best + costFn(e);
+        if (nd < (dist.get(e.to) ?? Infinity)) { dist.set(e.to, nd); prev.set(e.to, { from: u, edge: e }); }
+      }
+    }
+  };
+
+  const COSTS = {
+    fast: (e) => (e.minutes || 15) + 7,
+    cheap: (e) => (e.fare ?? 10) + (e.minutes || 15) * 0.04 + 0.5,
+    direct: (e) => 100 + (e.minutes || 15)
+  };
+  const TAG_LABEL = { fast: 'الأسرع ⏱️', cheap: 'الأرخص 💰', direct: 'أقل تبديل 🎯' };
+
+  const plan = (oRes, dRes) => {
+    const targets = new Set(dRes.candidates.map(c => c.st.id));
+    const sources = oRes.candidates.filter(c => !targets.has(c.st.id))
+      .map(c => ({ id: c.st.id, init: (1 - c.score) * 15 + (c.extra || 0) }));
+    if (!sources.length) return { same: true, options: [] };
+    const seen = new Map();
+    ['fast', 'cheap', 'direct'].forEach(tag => {
+      const edges = search(sources, targets, COSTS[tag]);
+      if (!edges || !edges.length) return;
+      const key = edges.map(e => e.from + '>' + e.to).join('|');
+      if (seen.has(key)) { seen.get(key).tags.push(tag); return; }
+      const legs = edges.length;
+      seen.set(key, {
+        tags: [tag], edges,
+        legs,
+        fare: edges.reduce((s, e) => s + (e.fare ?? 0), 0),
+        fareMissing: edges.some(e => e.fare == null),
+        minutes: edges.reduce((s, e) => s + (e.minutes || 0), 0) + (legs - 1) * 5
+      });
+    });
+    return { same: false, options: [...seen.values()] };
+  };
+
+  const boardingFor = (fromId, toId) => {
+    const from = byId.get(fromId), to = byId.get(toId);
+    const r = (from?.routes || []).find(x => norm(x.destinationDetails || '') === norm(to?.name || '') && x.boardingHint);
+    return r ? r.boardingHint : '';
+  };
+
+  const nearestTo = (coords, n = 4, maxKm = 15) => stations
+    .map(st => ({ st, d: distKm(coords, coord.get(st.id)) }))
+    .filter(x => x.d != null && x.d <= maxKm).sort((a, b) => a.d - b.d).slice(0, n);
+
+  const degree = (id) => (adj.get(id) || []).length;
+
+  return { byId, adj, coord, resolve, labelOf, parse, plan, boardingFor, nearestTo, degree, TAG_LABEL };
+}
+// ==ENGINE_END==
+
+const KIND_ICON = { ride: '🚐', bus: '🚌', metro: '🚇', walk: '🚶', microbus: '🚐', taxi: '🚕' };
+const fareTxt = (e) => (e.fare == null ? 'أجرة غير مسجلة' : `${e.fare} ج`);
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+const locate = () => new Promise(resolve => {
+  if (typeof navigator === 'undefined' || !navigator.geolocation) return resolve(null);
+  navigator.geolocation.getCurrentPosition(
+    p => resolve([p.coords.latitude, p.coords.longitude]),
+    () => resolve(null),
+    { enableHighAccuracy: true, timeout: 8000, maximumAge: 60000 }
+  );
+});
+
+// يعرض **نص** بخط عريض بدل ما تظهر النجوم
+const RichText = ({ text }) => String(text || '').split(/(\*\*[^*]+\*\*)/g).map((p, i) =>
+  p.startsWith('**') && p.endsWith('**') && p.length > 4
+    ? <strong key={i} className="font-black">{p.slice(2, -2)}</strong>
+    : <React.Fragment key={i}>{p}</React.Fragment>
+);
 
 const BesoAssistantModal = ({ stations = [], isDarkMode, onClose, onSelectStation, userAreas = [], user, isAdmin }) => {
   const [input, setInput] = useState('');
   const [customGuides, setCustomGuides] = useState([]);
+  const [links, setLinks] = useState([]);
+  const [isTyping, setIsTyping] = useState(false);
 
   const [correctingMsgId, setCorrectingMsgId] = useState(null);
   const [correctionPlace, setCorrectionPlace] = useState('');
@@ -45,15 +367,21 @@ const BesoAssistantModal = ({ stations = [], isDarkMode, onClose, onSelectStatio
   const [isSubmittingCorrection, setIsSubmittingCorrection] = useState(false);
   const [correctionSuccessMsg, setCorrectionSuccessMsg] = useState('');
 
-  const [conversationContext, setConversationContext] = useState({ expectingOriginFor: null, expectingDestFor: null });
+  // ذاكرة المحادثة (ref عشان نتفادى القيم القديمة داخل الـ async)
+  const ctxRef = useRef({ pendingDest: null, pendingOrigin: null, last: null, userCoords: null });
 
-  const approvedStations = (stations || []).filter(s => isAdmin || s.status !== 'pending');
+  const approvedStations = useMemo(
+    () => (stations || []).filter(s => s && s.id && (isAdmin || s.status !== 'pending')),
+    [stations, isAdmin]
+  );
+  const engine = useMemo(() => createEngine(approvedStations, links, !!isAdmin), [approvedStations, links, isAdmin]);
 
   const [messages, setMessages] = useState([
     {
       id: 'welcome',
       sender: 'beso',
-      text: `أهلاً بيك يا بطل! أنا "بيسو" 🤖 محرك البحث الجغرافي الذكي لـ "طريقنا".\n\nأنا مربوط لحظياً بـ (${approvedStations.length}) موقف ونقطة تبادلية في النظام!\n\n🔹 اسألني مثلاً: **"من الصحراوي لأكتوبر"** أو **"أنا في الدقي ورايح الحصري"**\n🔹 لو المواصلة محتاجة تبديل في الطريق (زي محور 26 يوليو أو المريوطية)، هركبلك الخطين على بعض وأقولك تنزل فين وتركب منين بالظبط! 🚀`
+      text: `أهلاً بيك يا بطل! أنا "بيسو" 🤖 مساعدك الذكي في "طريقنا".\n\nأنا مربوط لحظياً بـ (${approvedStations.length}) موقف ونقطة تبادلية وبحسبلك **أسرع** و**أرخص** طريق بينهم، حتى لو محتاج تبديل أكتر من مرة 🔄\n\n🔹 جرب: **"من الدقي لأكتوبر"** أو **"أنا في المنيب ورايح هايبر وان"**\n🔹 أو اكتب اسم أي مكان وأقولك الخطوط اللي بتطلع منه.\n🔹 وبعد أي إجابة اطلب: **أرخص** / **أسرع** / **اعكس الاتجاه**.`,
+      suggestions: ['من الدقي لأكتوبر', 'أقرب موقف ليا 📍', 'النقاط التبادلية 🔄']
     }
   ]);
   const messagesEndRef = useRef(null);
@@ -66,15 +394,22 @@ const BesoAssistantModal = ({ stations = [], isDarkMode, onClose, onSelectStatio
 
   useEffect(() => {
     const unsub = onSnapshot(collection(db, 'beso_knowledge_updates'), (snap) => {
-      const list = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-      setCustomGuides(list);
+      setCustomGuides(snap.docs.map(d => ({ id: d.id, ...d.data() })));
     }, () => {});
+    return () => unsub();
+  }, []);
+
+  // روابط الشبكة (المسارات بين المواقف) — بتتحدث لحظياً
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, LINKS_COLLECTION), (snap) => {
+      setLinks(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    }, () => setLinks([]));
     return () => unsub();
   }, []);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, correctingMsgId]);
+  }, [messages, correctingMsgId, isTyping]);
 
   useEffect(() => {
     const originalOverflow = document.body.style.overflow;
@@ -82,386 +417,296 @@ const BesoAssistantModal = ({ stations = [], isDarkMode, onClose, onSelectStatio
     return () => { document.body.style.overflow = originalOverflow; };
   }, []);
 
-  // مقارنة ذكية ومرنة للأسماء العربية (تفهم الكلمات الجزئية مثل "أكتوبر" == "مدينة 6 أكتوبر" أو "محور" == "تقاطع محور 26 يوليو")
-  const isSmartPlaceMatch = (textA, textB) => {
-    const a = normalizeArabic(textA);
-    const b = normalizeArabic(textB);
-    if (!a || !b) return false;
-    if (a.includes(b) || b.includes(a)) return true;
+  // ------------------------------------------------------------------
+  // تنسيق الردود
+  // ------------------------------------------------------------------
+  const stationLine = (st) => `${st.nodeType === 'hub' ? '🔄' : (st.nodeType === 'stop' ? '📍' : '🚏')} **${st.name}**`;
 
-    const tokensA = a.split(' ').filter(w => w.length > 2 && !STOP_WORDS.includes(w));
-    const tokensB = b.split(' ').filter(w => w.length > 2 && !STOP_WORDS.includes(w));
-    if (tokensA.length === 0 || tokensB.length === 0) return false;
-
-    return tokensA.some(tA => tokensB.some(tB => tA.includes(tB) || tB.includes(tA)));
+  const describePlace = (res) => {
+    const top = res.candidates.slice(0, 3);
+    const lines = top.map(({ st }) => {
+      const edges = (engine.adj.get(st.id) || []).slice().sort((a, b) => (a.fare ?? 99) - (b.fare ?? 99)).slice(0, 6);
+      const conn = edges.map(e => `${engine.byId.get(e.to)?.name} (${fareTxt(e)}${e.minutes ? ` • ~${e.minutes} د` : ''})`).join('\n   • ');
+      return `${stationLine(st)} — ${st.location}` +
+        (st.transferHint ? `\n💡 ${st.transferHint}` : '') +
+        (conn ? `\n🚐 بيوصلك مباشرة لـ:\n   • ${conn}` : '\n⚠️ مفيش خطوط مربوطة بالنقطة دي لسه.');
+    });
+    const more = res.candidates.length > 3 ? `\n\n… وفيه ${res.candidates.length - 3} نقطة تانية في المنطقة دي.` : '';
+    return { text: `🔍 **${engine.labelOf(res)}**\n\n${lines.join('\n\n')}${more}`, stations: top.map(x => x.st) };
   };
 
-  // هل النقطة/الموقف يطابق المكان المطلوب نصياً أو جغرافياً؟
-  const doesNodeMatchPlace = (station, placeText, maxDistKm = 4.5) => {
-    if (!station || !placeText) return false;
-    if (
-      isSmartPlaceMatch(station.name, placeText) ||
-      isSmartPlaceMatch(station.location, placeText) ||
-      isSmartPlaceMatch(station.governorate, placeText) ||
-      isSmartPlaceMatch(station.transferHint, placeText)
-    ) {
-      return true;
+  const formatRoute = (oRes, dRes, planResult, pref) => {
+    const oLabel = engine.labelOf(oRes), dLabel = engine.labelOf(dRes);
+
+    if (planResult.same) {
+      return { text: `🤔 **(${oLabel})** و **(${dLabel})** هما نفس النقطة أو قريبين جداً من بعض.\nجرب تحدد مكان أبعد شوية، أو قولي رايح فين بالظبط.`, stations: dRes.candidates.slice(0, 2).map(c => c.st) };
     }
-    const placeCoords = getPlaceCoords(placeText);
-    const stCoords = getPlaceCoords(station);
-    const dist = getDistanceKm(placeCoords[0], placeCoords[1], stCoords[0], stCoords[1]);
-    return dist <= maxDistKm;
-  };
 
-  // هل خط السير يودي للوجهة المطلوبة؟
-  const doesRouteReachPlace = (route, placeText) => {
-    if (!route || !placeText) return false;
-    if (
-      isSmartPlaceMatch(route.destination, placeText) ||
-      isSmartPlaceMatch(route.destinationDetails, placeText) ||
-      isSmartPlaceMatch(route.boardingHint, placeText)
-    ) {
-      return true;
-    }
-    return false;
-  };
-
-  // محلل الجمل لاستخراج (من) و (إلى) بدقة عالية
-  const parseTransitQuery = (text) => {
-    const cleanText = text.replace(/[؟?.,،]/g, ' ').replace(/\s+/g, ' ').trim();
-
-    const p1 = /(?:رايح|اروح|اسافر|عايز اروح|ازاي اروح|مواصلات|اركب ايه ل|طريق)\s+(.+?)\s+(?:من|وانا في|مكاني في)\s+(.+)/;
-    const m1 = cleanText.match(p1);
-    if (m1) return { dest: m1[1].trim(), origin: m1[2].trim() };
-
-    const p2 = /(?:من|انا في|متواجد في|مكاني)\s+(.+?)\s+(?:الى|إلى|لـ|ل|عايز اروح|رايح|لحد|اتجاه)\s+(.+)/;
-    const m2 = cleanText.match(p2);
-    if (m2) return { origin: m2[1].trim(), dest: m2[2].trim() };
-
-    const p3 = /(?:عايز اروح|ازاي اروح|رايح|سافر|مواصلات ل|اروح)\s+(.+)/;
-    const m3 = cleanText.match(p3);
-    if (m3) return { origin: null, dest: m3[1].trim() };
-
-    const p4 = /(?:انا في|مكاني في|اقرب موقف ل|اقرب نقطه ل|موقف في)\s+(.+)/;
-    const m4 = cleanText.match(p4);
-    if (m4) return { origin: m4[1].trim(), dest: null };
-
-    return { origin: null, dest: null };
-  };
-
-  // ============================================================================
-  // العقل الجغرافي والشبكي الجديد لـ "بيسو" (100% من داتا الأدمن الحية)
-  // ============================================================================
-  const generateBesoResponse = (queryText) => {
-    const normQuery = normalizeArabic(queryText);
-
-    // 1. لو المستخدم سأل عن النقاط التبادلية المتسجلة
-    if (normQuery.includes('النقاط التبادليه') || normQuery.includes('نقط التبديل')) {
-      const hubs = approvedStations.filter(s => s.nodeType === 'hub' || s.transferHint);
-      if (hubs.length === 0) {
-        return {
-          text: `حالياً مفيش نقاط متصنفة كـ "نقطة تبادلية 🔄" في لوحة التحكم.\nتقدر كأدمن تفتح (خريطة GIS) أو تضغط على أي موقف وتغير نوعه لـ (نقطة تبادلية 🔄) وتكتب فيه إرشاد التبديل وهيظهرلي هنا فوراً!`,
-          queryContext: queryText
-        };
-      }
-      const hubsText = hubs.map((h, i) => `${i + 1}. **${h.name}** (${h.location})${h.transferHint ? `\n   💡 التحويلة: ${h.transferHint}` : ''}`).join('\n');
+    if (!planResult.options.length) {
+      const oN = oRes.candidates.slice(0, 2).map(c => `**${c.st.name}**`).join(' أو ');
+      const dN = dRes.candidates.slice(0, 2).map(c => `**${c.st.name}**`).join(' أو ');
       return {
-        text: `🔄 **النقاط التبادلية والتقاطعات المسجلة حالياً في النظام (${hubs.length}):**\n\n${hubsText}`,
-        matchedStations: hubs.slice(0, 4),
-        queryContext: queryText
+        text: `🧩 لقيت النقطتين على الخريطة (${oN} ⬅️ ${dN}) بس **مفيش مسار مربوط بينهم** في الداتا لسه، حتى بالتبديل.\n\n💡 تقدر تضيف الرابط الناقص من (خريطة GIS) في لوحة الأدمن، أو تضغط **✏️ إضافة إرشاد** تحت رسالتي وتكتب الخط وأنا هشتغل بيه فوراً.`,
+        stations: [...oRes.candidates.slice(0, 2), ...dRes.candidates.slice(0, 2)].map(c => c.st)
       };
     }
 
-    // 2. فحص التوجيهات المباشرة المعتمدة من الأدمن في (beso_knowledge_updates)
-    const directCustomGuides = customGuides.filter(cg => {
-      if (cg.status !== 'approved') return false;
-      const kwParts = String(cg.placeKeywords || '').split(/[-،,]/).map(s => s.trim()).filter(Boolean);
-      return kwParts.length > 0 && kwParts.every(part => isSmartPlaceMatch(queryText, part));
+    const main = options => options.find(o => o.tags.includes(pref)) || options[0];
+    const opts = planResult.options;
+    const m = main(opts);
+    const others = opts.filter(o => o !== m);
+
+    const legsText = m.edges.map((e, i) => {
+      const from = engine.byId.get(e.from), to = engine.byId.get(e.to);
+      const boarding = engine.boardingFor(e.from, e.to);
+      const note = e.note && !e.note.includes('⇄') ? e.note : '';
+      let t = `${i + 1}️⃣ من **${from.name}** اركب ${KIND_ICON[e.kind] || '🚐'} ⬅️ **${to.name}**\n   💰 ${fareTxt(e)}${e.minutes ? ` • ⏱️ ~${e.minutes} د` : ''}`;
+      if (i === 0 && from.transferHint) t += `\n   💡 ${from.transferHint}`;
+      if (boarding) t += `\n   📍 تركب من: ${boarding}`;
+      if (note) t += `\n   📝 ${note}`;
+      if (i < m.edges.length - 1 && to.transferHint) t += `\n🔄 **بدّل في ${to.name}:** ${to.transferHint}`;
+      else if (i < m.edges.length - 1) t += `\n🔄 **بدّل هنا** وكمّل للخط اللي بعده.`;
+      return t;
+    }).join('\n\n');
+
+    const fareStr = m.fareMissing ? `${m.fare}+ ج (في خط أجرته مش مسجلة)` : `${m.fare} ج`;
+    const tagStr = m.tags.map(t => engine.TAG_LABEL[t]).join(' + ');
+    const header = `🎯 **${tagStr}** من (${oLabel}) إلى (${dLabel})`;
+    const summary = `⏱️ ~${m.minutes} دقيقة • 💰 ${fareStr} • 🔄 ${m.legs > 1 ? `${m.legs - 1} تبديل` : 'من غير تبديل'}`;
+    const last = engine.byId.get(m.edges[m.edges.length - 1].to);
+
+    const altLines = others.map(o => {
+      const names = [engine.byId.get(o.edges[0].from).name, ...o.edges.map(e => engine.byId.get(e.to).name)].join(' ⬅️ ');
+      return `• **${o.tags.map(t => engine.TAG_LABEL[t]).join(' + ')}:** ${names}\n   ⏱️ ~${o.minutes} د • 💰 ${o.fare}${o.fareMissing ? '+' : ''} ج`;
     });
 
-    if (directCustomGuides.length > 0 && !normQuery.includes('فكره التطبيق')) {
-      const topGuide = directCustomGuides[0];
-      return {
-        text: `📌 **إرشاد مباشر معتمد لـ (${topGuide.placeKeywords}):**\n\n${topGuide.correctedInfo}`,
-        queryContext: queryText
-      };
-    }
+    const text = `${header}\n${summary}\n\n${legsText}\n\n🏁 **هتوصل عند:** ${last.name}` +
+      (altLines.length ? `\n\n🔀 **بدائل تانية:**\n${altLines.join('\n')}` : '');
 
-    // 3. فحص التحيات والأسئلة العامة
-    const matchedIntent = BESO_CONVERSATIONAL_INTENTS.find(intent =>
-      intent.keywords.some(kw => normQuery.includes(normalizeArabic(kw)))
-    );
-    const isTransitWords = ['اروح', 'مواصلات', 'طريق', 'خط', 'موقف', 'من', 'الى', 'رايح', 'انا في', 'اقرب'].some(w => normQuery.includes(w));
-    if (matchedIntent && (!isTransitWords || matchedIntent.id === 'app_purpose')) {
-      const reply = matchedIntent.replies[Math.floor(Math.random() * matchedIntent.replies.length)];
-      return { text: reply, queryContext: queryText };
-    }
+    const stationsOnPath = [engine.byId.get(m.edges[0].from), ...m.edges.map(e => engine.byId.get(e.to))].filter(Boolean);
+    return { text, stations: stationsOnPath };
+  };
 
-    // 4. استخراج (الانطلاق o) و (الوصول d)
-    const parsed = parseTransitQuery(normQuery);
-    let o = parsed.origin;
-    let d = parsed.dest;
+  // ------------------------------------------------------------------
+  // العقل: بيحلل الرسالة ويرد
+  // ------------------------------------------------------------------
+  const generateBesoResponse = async (queryText) => {
+    const ctx = ctxRef.current;
+    const nq = norm(queryText);
+    const toks = nq.split(' ').filter(Boolean);
+    const reply = (text, extra = {}) => ({ text, queryContext: queryText, ...extra });
 
-    if (conversationContext.expectingOriginFor) {
-      d = conversationContext.expectingOriginFor;
-      o = o || queryText.trim();
-      setConversationContext({ expectingOriginFor: null, expectingDestFor: null });
-    } else if (conversationContext.expectingDestFor) {
-      o = conversationContext.expectingDestFor;
-      d = d || queryText.trim();
-      setConversationContext({ expectingOriginFor: null, expectingDestFor: null });
-    } else if (d && !o) {
-      if (userAreas && userAreas.length > 0) {
-        o = userAreas[0];
+    // إرشادات الأدمن المعتمدة (بتتضاف على الإجابة، أو بترد لوحدها لو مفيش حاجة تانية)
+    const guideBlock = (() => {
+      const qT = toks.map(stem);
+      const hits = customGuides.filter(cg => {
+        if (cg.status !== 'approved') return false;
+        const parts = String(cg.placeKeywords || '').split(/[-،,]/).map(s => s.trim()).filter(Boolean);
+        return parts.length > 0 && parts.every(part => {
+          const pT = tokenize(part);
+          return pT.length > 0 && pT.every(pt => qT.some(q => tokenMatch(q, pt) >= 0.8));
+        });
+      });
+      if (!hits.length) return '';
+      return hits.slice(0, 2).map(g => `📌 **إرشاد معتمد من الإدارة (${g.placeKeywords}):**\n${g.correctedInfo}`).join('\n\n');
+    })();
+    const withGuide = (r) => (guideBlock ? { ...r, text: `${r.text}\n\n${guideBlock}` } : r);
+
+    // 1) أقرب موقف (بالـ GPS أو لمكان معين)
+    const nearestWords = ['اقرب', 'حواليا', 'حولي', 'جنبي'];
+    if (toks.some(t => nearestWords.includes(t)) || nq.includes('قريب مني')) {
+      const stripped = toks.filter(t => !['اقرب', 'موقف', 'نقطه', 'تبادليه', 'ليا', 'لي', 'مني', 'ل', 'من', 'قريب', 'حواليا', 'حولي', 'جنبي', 'او', 'ده', 'يا', 'بيسو'].includes(t)).join(' ');
+      const placeRes = stripped ? engine.resolve(stripped) : null;
+      let center = null, centerLabel = '';
+      if (placeRes && placeRes.candidates.length) {
+        center = engine.coord.get(placeRes.candidates[0].st.id);
+        centerLabel = engine.labelOf(placeRes);
       } else {
-        setConversationContext({ expectingOriginFor: d, expectingDestFor: null });
-        return {
-          text: `تمام، عشان أطلعلك خط السير أو نقطة التبديل لـ **(${d})** بدقة 📍\nقولي أنت هتركب منين دلوقتي؟ (مثال: من الصحراوي، أو من الدقي)`,
-          queryContext: queryText
-        };
+        center = ctx.userCoords || await locate();
+        if (center) ctx.userCoords = center;
+        centerLabel = 'موقعك';
       }
-    } else if (o && !d) {
-      const originCoords = getPlaceCoords(o);
-      const nearbyNodes = approvedStations
-        .map((st, idx) => {
-          const stCoords = getPlaceCoords(st, idx + 1);
-          const dist = getDistanceKm(originCoords[0], originCoords[1], stCoords[0], stCoords[1]);
-          const textMatch = doesNodeMatchPlace(st, o, 3);
-          return { ...st, distanceKm: textMatch ? Math.min(dist, 0.8) : dist, textMatch };
-        })
-        .filter(st => st.textMatch || st.distanceKm <= 12)
-        .sort((a, b) => a.distanceKm - b.distanceKm)
-        .slice(0, 4);
-
-      setConversationContext({ expectingDestFor: o, expectingOriginFor: null });
-      const listStr = nearbyNodes.length > 0
-        ? `\n\n📍 **المواقف والنقاط القريبة من (${o}):**\n` + nearbyNodes.map(s => `• **${s.name}** (${s.nodeType === 'hub' ? 'نقطة تبادلية 🔄' : 'موقف 🚏'})`).join('\n')
-        : '';
-
-      return {
-        text: `أنت في **(${o})** 👍${listStr}\n\nقولي بقى رايح فين عشان أربطلك الخطوط؟`,
-        matchedStations: nearbyNodes,
-        queryContext: queryText
-      };
+      if (!center) {
+        return reply(`مقدرتش أحدد موقعك 📍 (ممكن إذن الموقع مقفول).\nاكتبلي أنت فين وأنا أطلعلك أقرب نقاط، مثلاً: **"أقرب موقف للدقي"**.`);
+      }
+      const near = engine.nearestTo(center, 5, 25);
+      if (!near.length) return reply(`مفيش مواقف مسجلة قريبة من (${centerLabel}) في الداتا لسه.`);
+      const lines = near.map(x => `• ${stationLine(x.st)} — ${x.d < 1 ? `${Math.round(x.d * 1000)} م` : `${x.d.toFixed(1)} كم`} (${x.st.location})`).join('\n');
+      return reply(`📍 **أقرب نقاط من (${centerLabel}):**\n\n${lines}`, {
+        matchedStations: near.slice(0, 4).map(x => x.st),
+        suggestions: near.slice(0, 2).map(x => x.st.name)
+      });
     }
 
-    // 5. لو المستخدم كتب اسم مكان واحد فقط بدون (من/إلى)، نبحث في كل المواقف والخطوط اللي بتروح المكان ده أو تطلع منه
-    if (!o && !d) {
-      const matchingNodes = approvedStations.filter(st =>
-        doesNodeMatchPlace(st, queryText, 2) ||
-        (st.routes || []).some(r => (isAdmin || r.status !== 'pending') && doesRouteReachPlace(r, queryText))
-      );
+    // 2) "استخدم موقعي" (بعد ما بيسو يسأل عن مكانك)
+    if (/(استخدم|حدد|خد|خذ)\s*موقعي|موقعي الحالي|مكاني الحالي/.test(nq)) {
+      const c = await locate();
+      if (!c) return reply(`مقدرتش أوصل لموقعك 😕 اكتبلي مكانك يدوي (مثال: **من الدقي**).`);
+      ctx.userCoords = c;
+      if (ctx.pendingDest) {
+        const dRes = ctx.pendingDest; ctx.pendingDest = null;
+        return routeReply(await fromMyLocation(c), dRes, null);
+      }
+      return reply(`تمام، حددت موقعك ✅ قولي رايح فين.`, { suggestions: ['أقرب موقف ليا 📍'] });
+    }
 
-      if (matchingNodes.length > 0) {
-        const lines = [];
-        matchingNodes.slice(0, 4).forEach(st => {
-          const matchingRoutes = (st.routes || []).filter(r => (isAdmin || r.status !== 'pending') && doesRouteReachPlace(r, queryText));
-          if (matchingRoutes.length > 0) {
-            matchingRoutes.forEach(r => {
-              lines.push(`• من **${st.name}** (${st.location}) ⬅️ اركب خط **${r.destinationDetails || r.destination}** (${r.fare} ج)${r.boardingHint ? `\n  📍 تركب من: ${r.boardingHint}` : ''}${st.transferHint ? `\n  💡 ملاحظة المكان: ${st.transferHint}` : ''}`);
-            });
-          } else {
-            lines.push(`• **${st.name}** (${st.location}) — متسجل فيه ${(st.routes || []).length} خطوط سير${st.transferHint ? `\n  💡 إرشاد التبديل: ${st.transferHint}` : ''}`);
-          }
-        });
+    // 3) النقاط التبادلية
+    const hubWord = nq.includes('تبادليه') || nq.includes('نقط التبديل') || nq.includes('نقاط التبديل') || nq.includes('ترانزيت');
+    if (hubWord && !toks.includes('من')) {
+      const hubs = approvedStations.filter(s => s.nodeType === 'hub')
+        .sort((a, b) => engine.degree(b.id) - engine.degree(a.id));
+      if (!hubs.length) {
+        return reply(`حالياً مفيش نقاط متصنفة كـ "نقطة تبادلية 🔄" في لوحة التحكم.`);
+      }
+      const txt = hubs.slice(0, 12).map((h, i) => `${i + 1}. **${h.name}** (${h.location}) — 🔗 ${engine.degree(h.id)} اتصال${h.transferHint ? `\n   💡 ${h.transferHint}` : ''}`).join('\n');
+      return reply(`🔄 **النقاط التبادلية مرتبة بعدد اتصالاتها (${hubs.length}):**\n\n${txt}${hubs.length > 12 ? `\n\n… و${hubs.length - 12} نقطة تانية.` : ''}`, { matchedStations: hubs.slice(0, 4) });
+    }
 
-        return {
-          text: `🔍 **نتائج البحث في داتا المواقف والنقاط التبادلية عن (${queryText}):**\n\n${lines.join('\n\n')}`,
-          matchedStations: matchingNodes.slice(0, 4),
-          queryContext: queryText
-        };
+    // 4) الدردشة (بالمطابقة الكاملة للكلمة عشان "هايبر" ما تتفهمش "هاي")
+    const padded = ` ${nq} `;
+    const matchedIntent = BESO_CONVERSATIONAL_INTENTS.find(it => it.keywords.some(kw => padded.includes(` ${norm(kw)} `)));
+    if (matchedIntent) {
+      const transitish = toks.some(t => ['اروح', 'رايح', 'من', 'الي', 'الى', 'لحد', 'موقف', 'مواصلات'].includes(t));
+      if (!transitish || matchedIntent.id === 'app_purpose') {
+        const r = matchedIntent.replies[Math.floor(Math.random() * matchedIntent.replies.length)];
+        return reply(r);
       }
     }
 
-    // ============================================================================
-    // 6. محرك المسارات الذكي (مباشر + ترانزيت عبر النقاط التبادلية Multi-Leg)
-    // ============================================================================
-    if (o && d) {
-      const originNodes = approvedStations.filter(st => doesNodeMatchPlace(st, o, 6));
-      const directRoutes = [];
-      const transferRoutes = [];
-      const hubDirectRoutes = [];
+    // 5) متابعات: اعكس الاتجاه / أرخص / أسرع
+    const pref = wantsPref(nq);
+    const wantsFlip = /(اعكس|العكس|عكس|رجوع|ارجع|راجع)/.test(nq);
+    const parsed = engine.parse(queryText);
+    const hasNewPlaces = !!(parsed.origin || parsed.dest || (parsed.place && parsed.place.candidates.length));
 
-      // أ) البحث عن خط مباشر (Direct Route: Origin -> Destination)
-      originNodes.forEach(st => {
-        (st.routes || []).forEach(r => {
-          if (!isAdmin && r.status === 'pending') return;
-          if (doesRouteReachPlace(r, d)) {
-            directRoutes.push({ station: st, route: r });
-          }
-        });
-      });
-
-      // ب) البحث عن مسار بمرحلتين عبر نقطة تبادلية (Two-Leg Transfer: Origin -> Hub -> Destination)
-      // يفحص إذا كان موقف الانطلاق يودي لنقطة تانية (أو نقطة تبادلية)، والنقطة دي فيها خط بيودي للوجهة (d)
-      originNodes.forEach(stA => {
-        (stA.routes || []).forEach(r1 => {
-          if (!isAdmin && r1.status === 'pending') return;
-          const leg1Target = r1.destinationDetails || r1.destination;
-
-          // إيجاد النقطة التبادلية أو الموقف الوسيط (stB) الذي يطابق وجهة الخط الأول
-          approvedStations.forEach(stB => {
-            if (stB.id === stA.id) return;
-            const isHubMatch =
-              isSmartPlaceMatch(stB.name, leg1Target) ||
-              isSmartPlaceMatch(stB.location, leg1Target) ||
-              (r1.destinationDetails && isSmartPlaceMatch(stB.name, r1.destinationDetails));
-
-            if (isHubMatch) {
-              (stB.routes || []).forEach(r2 => {
-                if (!isAdmin && r2.status === 'pending') return;
-                if (doesRouteReachPlace(r2, d)) {
-                  transferRoutes.push({
-                    fromStation: stA,
-                    leg1Route: r1,
-                    hubStation: stB,
-                    leg2Route: r2
-                  });
-                }
-              });
-            }
-          });
-        });
-      });
-
-      // ج) حالة إضافية مهمة جداً (مثال الصحراوي -> محور 26 يوليو -> الحصري):
-      // إذا كان المستخدم لم يسجل "موقف الصحراوي" كموقف مستقل، لكنه سجل "تقاطع محور 26 يوليو" كنقطة تبادلية تقع في/قرب الصحراوي أو مذكور في إرشادها كلمة "الصحراوي"، وطالع منها خط لـ "الحصري/أكتوبر"!
-      approvedStations.forEach(hubNode => {
-        const hubMatchesOriginContext =
-          isSmartPlaceMatch(hubNode.transferHint, o) ||
-          isSmartPlaceMatch(hubNode.name, o) ||
-          isSmartPlaceMatch(hubNode.location, o);
-
-        (hubNode.routes || []).forEach(r => {
-          if (!isAdmin && r.status === 'pending') return;
-          const routeBoardingMatchesOrigin = isSmartPlaceMatch(r.boardingHint, o);
-          if ((hubMatchesOriginContext || routeBoardingMatchesOrigin) && doesRouteReachPlace(r, d)) {
-            if (!directRoutes.some(dr => dr.station.id === hubNode.id && dr.route === r)) {
-              hubDirectRoutes.push({ hub: hubNode, route: r });
-            }
-          }
-        });
-      });
-
-      // د) البحث الجغرافي عن أقرب نقطة تبادلية في الطريق بين (o) و (d) بها خط يذهب إلى (d)
-      if (directRoutes.length === 0 && transferRoutes.length === 0 && hubDirectRoutes.length === 0) {
-        const oCoords = getPlaceCoords(o);
-        approvedStations.forEach(stB => {
-          (stB.routes || []).forEach(r2 => {
-            if (!isAdmin && r2.status === 'pending') return;
-            if (doesRouteReachPlace(r2, d)) {
-              const stBCoords = getPlaceCoords(stB);
-              const distFromO = getDistanceKm(oCoords[0], oCoords[1], stBCoords[0], stBCoords[1]);
-              if (distFromO <= 18) {
-                hubDirectRoutes.push({ hub: stB, route: r2, distKm: distFromO });
-              }
-            }
-          });
-        });
-      }
-
-      // ================== صياغة الرد الذكي للمستخدم ==================
-      const replyBlocks = [];
-      const relatedStations = [];
-
-      // 1. عرض الخط المباشر إن وجد
-      if (directRoutes.length > 0) {
-        replyBlocks.push(`🎯 **خط مباشر من (${o}) إلى (${d}):**`);
-        directRoutes.slice(0, 3).forEach((item, idx) => {
-          if (!relatedStations.some(s => s.id === item.station.id)) relatedStations.push(item.station);
-          const rTitle = item.route.destinationDetails ? `${item.route.destinationDetails} (${item.route.destination})` : item.route.destination;
-          const transferNote = item.station.transferHint ? `\n   💡 **إرشاد المكان:** ${item.station.transferHint}` : '';
-          const boardingNote = item.route.boardingHint ? `\n   📍 **تركب منين:** ${item.route.boardingHint}` : '';
-          replyBlocks.push(
-            `${idx + 1}️⃣ من **${item.station.name}** (${item.station.location}) ⬅️ اركب خط **${rTitle}** — الأجرة: **${item.route.fare} ج**${transferNote}${boardingNote}`
-          );
-        });
-      }
-
-      // 2. عرض خط التبديل على مرحلتين (Multi-Leg Transfer) إن وجد
-      if (transferRoutes.length > 0) {
-        replyBlocks.push(`🔄 **خط سير بالتبديل في نقطة تبادلية (مرحلتين):**`);
-        transferRoutes.slice(0, 2).forEach((tr) => {
-          if (!relatedStations.some(s => s.id === tr.fromStation.id)) relatedStations.push(tr.fromStation);
-          if (!relatedStations.some(s => s.id === tr.hubStation.id)) relatedStations.push(tr.hubStation);
-
-          const leg1Name = tr.leg1Route.destinationDetails || tr.leg1Route.destination;
-          const leg2Name = tr.leg2Route.destinationDetails ? `${tr.leg2Route.destinationDetails} (${tr.leg2Route.destination})` : tr.leg2Route.destination;
-          const totalFare = (Number(tr.leg1Route.fare) || 0) + (Number(tr.leg2Route.fare) || 0);
-
-          const hubInstruction = tr.hubStation.transferHint
-            ? `\n🚶‍♂️ **التحويلة في (${tr.hubStation.name}):** ${tr.hubStation.transferHint}`
-            : `\n🚶‍♂️ **التحويلة:** انزل في **(${tr.hubStation.name})** وبدّل للخط التاني.`;
-
-          const leg2Boarding = tr.leg2Route.boardingHint
-            ? ` *(اركب من: ${tr.leg2Route.boardingHint})*`
-            : '';
-
-          replyBlocks.push(
-            `1️⃣ **المرحلة الأولى:** من **${tr.fromStation.name}** اركب خط **(${leg1Name})** — الأجرة: ${tr.leg1Route.fare} ج.` +
-            `${hubInstruction}\n` +
-            `2️⃣ **المرحلة الثانية:** من **${tr.hubStation.name}** اركب خط **(${leg2Name})**${leg2Boarding} — الأجرة: ${tr.leg2Route.fare} ج.\n` +
-            `💰 **إجمالي الأجرة التقريبية:** ${totalFare} ج.`
-          );
-        });
-      }
-
-      // 3. عرض النقاط التبادلية التي تربط الطريق مباشرة (مثل تقاطع محور 26 يوليو)
-      if (directRoutes.length === 0 && transferRoutes.length === 0 && hubDirectRoutes.length > 0) {
-        replyBlocks.push(`🔄 **أقرب نقطة تبادلية توصلّك من (${o}) إلى (${d}):**`);
-        hubDirectRoutes.slice(0, 3).forEach((item) => {
-          if (!relatedStations.some(s => s.id === item.hub.id)) relatedStations.push(item.hub);
-          const rTitle = item.route.destinationDetails ? `${item.route.destinationDetails} (${item.route.destination})` : item.route.destination;
-          const hubHint = item.hub.transferHint ? `\n🚶‍♂️ **إزاي تبدل وتركب:** ${item.hub.transferHint}` : '';
-          const boardHint = item.route.boardingHint ? `\n📍 **مكان الركوب بالظبط:** ${item.route.boardingHint}` : '';
-
-          replyBlocks.push(
-            `• انزل عند **${item.hub.name}** (${item.hub.location})${hubHint}${boardHint}\n` +
-            `🚐 ومن هناك اركب خط **${rTitle}** — الأجرة: **${item.route.fare} ج**.`
-          );
-        });
-      }
-
-      // 4. إذا لم يجد أي خط مسجل في داتا الأدمن لهذه الوجهة بعد
-      if (replyBlocks.length === 0) {
-        replyBlocks.push(
-          `🤔 دورت في المواقف والنقاط التبادلية المسجلة حالياً على خط بيربط **(${o})** بـ **(${d})** وملقتش النقطة دي متسجلة لسه.\n\n` +
-          `💡 **بما إنك بتبني الداتا:** تقدر تفتح (مواقف مصر) أو (خريطة GIS في لوحة الأدمن) وتضيف النقطة التبادلية أو الخط ده، أو تضغط **(✏️ تعديل المعلومة)** تحت رسالتي وتكتبه وهيشتغل معايا فوراً في نفس اللحظة! 🚀`
-        );
-      }
-
-      return {
-        text: replyBlocks.join('\n\n'),
-        matchedStations: relatedStations.slice(0, 4),
-        queryContext: `من ${o} إلى ${d}`
-      };
+    if (ctx.last && !hasNewPlaces && (pref || wantsFlip)) {
+      const { o, d } = ctx.last;
+      const [oo, dd] = wantsFlip ? [d, o] : [o, d];
+      return routeReply(oo, dd, pref || ctx.last.pref);
     }
 
+    // 6) تجميع (من) و(إلى) مع الذاكرة
+    let origin = parsed.origin, dest = parsed.dest;
+    const place = parsed.place && parsed.place.candidates.length ? parsed.place : null;
+
+    if (origin && !origin.candidates.length) {
+      return reply(didYouMean(origin.text, origin));
+    }
+    if (dest && !dest.candidates.length) {
+      return reply(didYouMean(dest.text, dest));
+    }
+
+    if (ctx.pendingOrigin && !origin) {
+      const d = dest || place;
+      if (d) { origin = ctx.pendingOrigin; dest = d; }
+    } else if (ctx.pendingDest && !dest) {
+      const o = origin || place;
+      if (o) { dest = ctx.pendingDest; origin = o; }
+    }
+    if (origin && dest) { ctx.pendingOrigin = null; ctx.pendingDest = null; }
+
+    // وجهة بس: حاول تعرف نقطة البداية (GPS / منطقة المستخدم) وإلا اسأل
+    if (dest && !origin) {
+      if (ctx.userCoords) {
+        return routeReply(await fromMyLocation(ctx.userCoords), dest, pref);
+      }
+      const areaTxt = Array.isArray(userAreas) && typeof userAreas[0] === 'string' ? userAreas[0] : null;
+      const areaRes = areaTxt ? engine.resolve(areaTxt) : null;
+      if (areaRes && areaRes.candidates.length) {
+        const r = await routeReply(areaRes, dest, pref);
+        return { ...r, text: `(افترضت إنك في **${engine.labelOf(areaRes)}** حسب بيانات حسابك)\n\n${r.text}` };
+      }
+      ctx.pendingDest = dest;
+      return reply(`تمام، رايح **(${engine.labelOf(dest)})** 🎯\nقولي هتركب منين؟ (مثال: **من الدقي**) أو اضغط تحت وأنا أستخدم موقعك.`, {
+        suggestions: ['استخدم موقعي 📍'],
+        matchedStations: dest.candidates.slice(0, 3).map(c => c.st)
+      });
+    }
+
+    // بداية بس
+    if (origin && !dest) {
+      ctx.pendingOrigin = origin;
+      const info = describePlace(origin);
+      return withGuide(reply(`أنت في **(${engine.labelOf(origin)})** 👍\n\n${info.text}\n\nقولي بقى رايح فين عشان أحسبلك أسرع وأرخص طريق؟`, { matchedStations: info.stations }));
+    }
+
+    // مسار كامل
+    if (origin && dest) return withGuide(await routeReply(origin, dest, pref));
+
+    // اسم مكان واحد فقط → معلومات المكان
+    if (place) {
+      ctx.pendingOrigin = null;
+      const info = describePlace(place);
+      return withGuide(reply(info.text, { matchedStations: info.stations }));
+    }
+
+    if (guideBlock) return reply(guideBlock);
+
+    return reply(`مفهمتش قصدك 🤔 قولي أنت فين ورايح فين؟ مثلاً: **"من الصحراوي لأكتوبر"** أو **"من الدقي للحصري"**، أو اكتب اسم موقف أعرفك خطوطه.`, {
+      suggestions: ['من الدقي لأكتوبر', 'النقاط التبادلية 🔄']
+    });
+
+    // ---- دوال مساعدة داخلية ----
+    function didYouMean(text, res) {
+      const sug = (res && res.suggestions) || [];
+      const sugTxt = sug.length ? `\n\nقصدك واحد من دول؟\n${sug.map(s => `• **${s.name}**`).join('\n')}` : '';
+      return `مش لاقي مكان اسمه **(${text})** في خريطة المواقف 🧐${sugTxt}\n\nلو المكان ده موجود فعلاً قولي اسمه بشكل تاني، أو ضيفه من (خريطة GIS).`;
+    }
+  };
+
+  // بيحوّل GPS لنقاط انطلاق (أقرب 3 نقاط + وقت مشي تقديري)
+  const fromMyLocation = async (coords) => {
+    const near = engine.nearestTo(coords, 3, 12);
     return {
-      text: `قولي يا بطل أنت فين ورايح فين؟ مثلاً: **"من الصحراوي لأكتوبر"** أو **"من الدقي للحصري"** وهطلعلك خط السير ونقط التبديل من داتا التطبيق فوراً! 🚀`,
-      queryContext: queryText
+      text: 'موقعك الحالي',
+      label: 'موقعك الحالي',
+      score: 1,
+      candidates: near.map(x => ({ st: x.st, score: 1, extra: Math.round(x.d / 4.5 * 60) }))
     };
   };
 
-  const handleSend = (textToProcess) => {
+  // بيحسب ويصيغ الرد ويحفظ آخر مسار للمتابعة
+  const routeReply = async (oRes, dRes, pref) => {
+    const ctx = ctxRef.current;
+    if (!oRes?.candidates?.length || !dRes?.candidates?.length) {
+      return { text: 'مقدرتش أحدد نقطة الانطلاق أو الوصول 🤔 جرب تكتب (من كذا لكذا).', queryContext: '' };
+    }
+    const planResult = engine.plan(oRes, dRes);
+    ctx.last = { o: oRes, d: dRes, pref: pref || (ctx.last && ctx.last.pref) || 'fast' };
+    const out = formatRoute(oRes, dRes, planResult, pref || 'fast');
+    const sugg = [];
+    if (planResult.options.length > 1) {
+      if (!planResult.options[0].tags.includes('cheap') || !pref) sugg.push('💰 أرخص طريق');
+      sugg.push('⚡ أسرع طريق');
+    }
+    sugg.push('↔️ اعكس الاتجاه');
+    return {
+      text: out.text,
+      matchedStations: out.stations.slice(0, 5),
+      queryContext: `من ${engine.labelOf(oRes)} إلى ${engine.labelOf(dRes)}`,
+      suggestions: [...new Set(sugg)].slice(0, 3)
+    };
+  };
+
+  const handleSend = async (textToProcess) => {
     const cleanText = (textToProcess || input).trim();
-    if (!cleanText) return;
+    if (!cleanText || isTyping) return;
 
-    const userMsg = { id: Date.now() + '_u', sender: 'user', text: cleanText };
-    setMessages(prev => [...prev, userMsg]);
+    setMessages(prev => [...prev, { id: Date.now() + '_u', sender: 'user', text: cleanText }]);
     setInput('');
-
-    setTimeout(() => {
-      const besoReplyData = generateBesoResponse(cleanText);
-      const besoMsg = {
-        id: Date.now() + '_b',
-        sender: 'beso',
-        text: besoReplyData.text,
-        matchedStations: besoReplyData.matchedStations,
-        queryContext: besoReplyData.queryContext
-      };
-      setMessages(prev => [...prev, besoMsg]);
-    }, 350);
+    setIsTyping(true);
+    try {
+      const [data] = await Promise.all([generateBesoResponse(cleanText), sleep(350)]);
+      setMessages(prev => [...prev, {
+        id: Date.now() + '_b', sender: 'beso', text: data.text,
+        matchedStations: data.matchedStations, queryContext: data.queryContext, suggestions: data.suggestions
+      }]);
+    } catch (err) {
+      console.error(err);
+      setMessages(prev => [...prev, { id: Date.now() + '_b', sender: 'beso', text: 'حصلت مشكلة وأنا بحسب الطريق 😅 جرب تكتب السؤال تاني.' }]);
+    } finally {
+      setIsTyping(false);
+    }
   };
 
   const handleSubmitCorrection = async (e) => {
@@ -471,34 +716,36 @@ const BesoAssistantModal = ({ stations = [], isDarkMode, onClose, onSelectStatio
     setIsSubmittingCorrection(true);
     try {
       const userIsAdmin = Boolean(isAdmin || (user?.email && user.email.toLowerCase() === ADMIN_EMAIL));
-      const statusToSave = userIsAdmin ? 'approved' : 'pending';
-
       await addDoc(collection(db, 'beso_knowledge_updates'), {
         placeKeywords: correctionPlace.trim(),
         correctedInfo: correctionText.trim(),
-        status: statusToSave,
+        status: userIsAdmin ? 'approved' : 'pending',
         submittedBy: user?.uid || 'guest',
         submittedByName: user?.displayName || 'مستخدم طريقنا',
         createdAt: serverTimestamp()
       });
-
       setCorrectionSuccessMsg(userIsAdmin ? 'تم الحفظ والاعتماد فوراً في ذاكرة بيسو! ✅' : 'شكراً! تم الإرسال للإدارة للمراجعة ⏳');
+    } catch (err) {
+      setCorrectionSuccessMsg('تعذر الحفظ دلوقتي، جرب تاني ❌');
+    } finally {
+      setIsSubmittingCorrection(false);
       setTimeout(() => {
         setCorrectingMsgId(null); setCorrectionPlace(''); setCorrectionText(''); setCorrectionSuccessMsg('');
       }, 1800);
-    } catch (err) { } finally { setIsSubmittingCorrection(false); }
+    }
   };
 
   const bgCard = isDarkMode ? 'bg-slate-900/95 border-slate-700/80' : 'bg-white/95 border-slate-200';
   const bgInput = isDarkMode ? 'bg-slate-800 border-slate-700 text-white placeholder-slate-400' : 'bg-slate-100 border-slate-200 text-slate-900';
+  const lastBesoId = [...messages].reverse().find(m => m.sender === 'beso')?.id;
 
   const modalContent = (
     <>
       <div className="fixed inset-0 bottom-[72px] bg-black/25 backdrop-blur-[1px] z-[190]" onClick={onClose} />
 
-      <div 
+      <div
         dir="rtl"
-        onClick={(e) => e.stopPropagation()} 
+        onClick={(e) => e.stopPropagation()}
         className={`fixed bottom-[82px] left-3 right-3 sm:left-6 sm:right-auto sm:w-[410px] h-[66dvh] max-h-[550px] min-h-[350px] z-[200] ${bgCard} backdrop-blur-xl rounded-3xl shadow-[0_12px_45px_rgba(0,0,0,0.45)] flex flex-col overflow-hidden border animate-fade-in-up`}
       >
         <div className="px-4 py-3 bg-indigo-600 text-white flex items-center justify-between shadow-sm shrink-0">
@@ -512,7 +759,7 @@ const BesoAssistantModal = ({ stations = [], isDarkMode, onClose, onSelectStatio
                 <h3 className="font-black text-sm">المساعد الذكي "بيسو"</h3>
                 <span className="text-xs font-black bg-amber-400 text-slate-950 px-1.5 py-0.5 rounded-full flex items-center gap-0.5"><Sparkles size={9}/> Live GIS</span>
               </div>
-              <p className="text-xs text-indigo-100 font-bold">يربط المواقف والنقاط التبادلية لحظياً 🧠</p>
+              <p className="text-xs text-indigo-100 font-bold">أسرع وأرخص طريق بين {approvedStations.length} نقطة 🧠</p>
             </div>
           </div>
           <button aria-label="إغلاق" onClick={onClose} className="p-2.5 bg-white/15 hover:bg-rose-500 rounded-full transition-colors"><X size={18} /></button>
@@ -529,10 +776,40 @@ const BesoAssistantModal = ({ stations = [], isDarkMode, onClose, onSelectStatio
                   <div className={`p-3 rounded-2xl text-[13px] leading-relaxed whitespace-pre-line shadow-sm ${
                     isBeso ? (isDarkMode ? 'bg-slate-800 text-slate-100 border border-slate-700 rounded-tr-sm' : 'bg-white text-slate-800 border border-slate-200 rounded-tr-sm') : 'bg-indigo-600 text-white font-bold rounded-tl-sm'
                   }`}>
-                    {msg.text}
+                    <RichText text={msg.text} />
                   </div>
 
-                  {isBeso && (
+                  {isBeso && msg.matchedStations && msg.matchedStations.length > 0 && (
+                    <div className="w-full space-y-1.5 mt-0.5">
+                      <span className="text-xs font-black text-indigo-400 px-1 flex items-center gap-1"><Compass size={11}/> النقاط المرتبطة بالمسار (اضغط لفتح التفاصيل):</span>
+                      {msg.matchedStations.map((st) => (
+                        <button key={st.id} onClick={() => { onClose(); onSelectStation && onSelectStation(st); }} className={`w-full p-2 rounded-xl border flex items-center justify-between hover:border-indigo-500 ${isDarkMode ? 'bg-slate-900 border-slate-700 text-white' : 'bg-indigo-50/70 border-indigo-200 text-slate-900'}`}>
+                          <div className="flex items-center gap-2">
+                            <div className={`p-1.5 rounded-lg text-white ${st.nodeType === 'hub' ? 'bg-amber-600' : 'bg-indigo-600'}`}><BusFront size={13}/></div>
+                            <div className="text-right">
+                              <h4 className="text-xs font-black">{st.name}</h4>
+                              <p className="text-xs text-slate-400 font-bold">
+                                {st.nodeType === 'hub' ? 'نقطة تبادلية 🔄' : (st.nodeType === 'stop' ? 'نقطة 📍' : 'موقف 🚏')} • {st.location}
+                              </p>
+                            </div>
+                          </div>
+                          <ChevronLeft size={12} className="text-indigo-500"/>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
+                  {isBeso && msg.id === lastBesoId && msg.suggestions && msg.suggestions.length > 0 && !isTyping && (
+                    <div className="flex flex-wrap gap-1.5">
+                      {msg.suggestions.map((sg, i) => (
+                        <button key={i} onClick={() => handleSend(sg)} className={`text-xs font-black px-2.5 py-1.5 rounded-full border transition-colors ${isDarkMode ? 'bg-indigo-500/15 border-indigo-400/40 text-indigo-200 hover:bg-indigo-600 hover:text-white' : 'bg-indigo-50 border-indigo-200 text-indigo-700 hover:bg-indigo-600 hover:text-white'}`}>
+                          {sg}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
+                  {isBeso && msg.id !== 'welcome' && (
                     <button
                       onClick={() => {
                         if (isEditingThis) setCorrectingMsgId(null);
@@ -551,7 +828,7 @@ const BesoAssistantModal = ({ stations = [], isDarkMode, onClose, onSelectStatio
                   )}
 
                   {isBeso && isEditingThis && (
-                    <form onSubmit={(e) => handleSubmitCorrection(e, msg)} className={`w-full p-3 rounded-2xl border-2 border-amber-500/40 space-y-2 animate-fade-in-up ${isDarkMode ? 'bg-slate-900 text-white' : 'bg-amber-50 text-slate-900'}`}>
+                    <form onSubmit={handleSubmitCorrection} className={`w-full p-3 rounded-2xl border-2 border-amber-500/40 space-y-2 animate-fade-in-up ${isDarkMode ? 'bg-slate-900 text-white' : 'bg-amber-50 text-slate-900'}`}>
                       <span className="text-xs font-black text-amber-500 flex items-center gap-1"><PlusCircle size={13}/> تعليم بيسو خط أو تحويلة جديدة:</span>
                       {correctionSuccessMsg ? (
                         <div className="p-2.5 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-500 text-xs font-black">{correctionSuccessMsg}</div>
@@ -567,30 +844,20 @@ const BesoAssistantModal = ({ stations = [], isDarkMode, onClose, onSelectStatio
                       )}
                     </form>
                   )}
-
-                  {isBeso && msg.matchedStations && msg.matchedStations.length > 0 && (
-                    <div className="w-full space-y-1.5 mt-0.5">
-                      <span className="text-xs font-black text-indigo-400 px-1 flex items-center gap-1"><Compass size={11}/> النقاط المرتبطة بالمسار (اضغط لفتح التفاصيل):</span>
-                      {msg.matchedStations.map((st) => (
-                        <button key={st.id} onClick={() => { onClose(); onSelectStation(st); }} className={`w-full p-2 rounded-xl border flex items-center justify-between hover:border-indigo-500 ${isDarkMode ? 'bg-slate-900 border-slate-700 text-white' : 'bg-indigo-50/70 border-indigo-200 text-slate-900'}`}>
-                          <div className="flex items-center gap-2">
-                            <div className={`p-1.5 rounded-lg text-white ${st.nodeType === 'hub' ? 'bg-amber-600' : 'bg-indigo-600'}`}><BusFront size={13}/></div>
-                            <div className="text-right">
-                              <h4 className="text-xs font-black">{st.name}</h4>
-                              <p className="text-xs text-slate-400 font-bold">
-                                {st.nodeType === 'hub' ? 'نقطة تبادلية 🔄' : 'موقف 🚏'} • {st.location}
-                              </p>
-                            </div>
-                          </div>
-                          <ChevronLeft size={12} className="text-indigo-500"/>
-                        </button>
-                      ))}
-                    </div>
-                  )}
                 </div>
               </div>
             );
           })}
+
+          {isTyping && (
+            <div className="flex justify-start">
+              <div className={`px-3.5 py-2.5 rounded-2xl rounded-tr-sm border flex gap-1 ${isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-white border-slate-200'}`}>
+                <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-bounce" style={{ animationDelay: '0ms' }} />
+                <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-bounce" style={{ animationDelay: '150ms' }} />
+                <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-bounce" style={{ animationDelay: '300ms' }} />
+              </div>
+            </div>
+          )}
           <div ref={messagesEndRef} />
         </div>
 
@@ -604,7 +871,7 @@ const BesoAssistantModal = ({ stations = [], isDarkMode, onClose, onSelectStatio
 
         <form onSubmit={(e) => { e.preventDefault(); handleSend(); }} className={`p-2.5 shrink-0 flex items-center gap-2 border-t ${isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-100'}`}>
           <input type="text" value={input} onChange={(e) => setInput(e.target.value)} placeholder="مثال: من الصحراوي لأكتوبر..." className={`flex-1 px-3.5 py-2.5 rounded-xl border text-xs font-bold outline-none focus:ring-2 focus:ring-indigo-500 ${bgInput}`}/>
-          <button type="submit" disabled={!input.trim()} className="w-10 h-10 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white flex items-center justify-center shadow-md active:scale-95 shrink-0">
+          <button type="submit" disabled={!input.trim() || isTyping} className="w-10 h-10 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white flex items-center justify-center shadow-md active:scale-95 shrink-0">
             <Send size={16} className="rtl:rotate-180" />
           </button>
         </form>
