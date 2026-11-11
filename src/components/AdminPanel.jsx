@@ -12,6 +12,7 @@ import VerificationMigration from './VerificationMigration';
 import { hasVerificationDocs } from '../utils/verification';
 import { resizeAndConvertToBase64, formatTripDateTime, getPlaceCoords, EGYPT_CITIES } from '../utils/helpers';
 import { SUPPORTED_AREAS, NODE_TYPES } from '../utils/gisConstants';
+import { linkDocId, distanceBetween } from '../utils/gis';
 import GisMapTab from './GisMapTab';
 
 // re-export: StationModal وغيره لسه بيستوردوا NODE_TYPES من هنا
@@ -278,38 +279,92 @@ const AdminPanel = ({ isDarkMode, onClose, triggerToast, appSettings, user, open
     };
   }, []);
 
+  // استرداد مواقف ونقاط أكتوبر والشيخ زايد والهرم والمحور + ربطها ببعضها تلقائياً على الخريطة
   const handleSeedOctoberZayedData = async () => {
-    if (!window.confirm('هل تريد إضافة وتحديث داتا مواقف ونقاط تبديل (أكتوبر والشيخ زايد والهرم والمحور) تلقائياً في الخريطة؟')) return;
+    if (!window.confirm('هل تريد استرداد داتا مواقف ونقاط تبديل (أكتوبر والشيخ زايد والهرم والمحور) وربطها ببعضها على الخريطة تلقائياً؟')) return;
     setIsSeedingData(true);
     try {
       const batch = writeBatch(db);
-      let addedCount = 0;
+      let addedStationsCount = 0;
+      const stationMapByName = {};
 
+      // 1. تسجيل المواقف الموجودة حالياً في الخريطة
+      stationsList.forEach(st => {
+        if (st.name) stationMapByName[st.name.trim()] = st;
+      });
+
+      // 2. إضافة المواقف الناقصة من داتا أكتوبر وزايد
       OCTOBER_ZAYED_SEED_DATA.forEach((seedItem) => {
-        const alreadyExists = stationsList.some(
-          st => st.name.trim() === seedItem.name.trim()
-        );
-        if (!alreadyExists) {
+        const cleanName = seedItem.name.trim();
+        if (!stationMapByName[cleanName]) {
           const newDocRef = doc(collection(db, STATIONS_COLLECTION));
-          batch.set(newDocRef, {
+          const stationObj = {
             ...seedItem,
             status: 'approved',
             addedBy: user?.uid || 'admin_seed',
             crowdStatus: 'normal',
             crowdUpdatedAt: Date.now()
-          });
-          addedCount++;
+          };
+          batch.set(newDocRef, stationObj);
+          stationMapByName[cleanName] = { id: newDocRef.id, ...stationObj };
+          addedStationsCount++;
         }
       });
 
-      if (addedCount > 0) {
-        await batch.commit();
-        triggerToast(`تم استيراد (${addedCount}) موقف ونقطة تبادلية لأكتوبر وزايد بنجاح! 🎉🗺️`);
-      } else {
-        triggerToast('جميع مواقف ونقاط أكتوبر وزايد مضافة بالفعل في الخريطة ✅');
-      }
+      // 3. مصفوفة الروابط الذكية بين مواقف ونقاط أكتوبر والشيخ زايد والهرم والمحور
+      const OCTOBER_SEED_LINKS = [
+        { from: 'موقف الحصري الرئيسي', to: 'موقف ليلة القدر (الحي السادس)', kind: 'ride', fare: 10, minutes: 10, note: 'سرفيس داخلي بين الحصري والحي السادس' },
+        { from: 'موقف الحصري الرئيسي', to: 'تقاطع وصلة دهشور (ميدان جهينة / مول العرب)', kind: 'ride', fare: 10, minutes: 12, note: 'سرفيس محور الكفراوي / مول العرب' },
+        { from: 'موقف الحصري الرئيسي', to: 'موقف هايبر وان (مدخل زايد)', kind: 'ride', fare: 12, minutes: 18, note: 'سرفيس الحصري - الشيخ زايد - هايبر وان' },
+        { from: 'موقف الحصري الرئيسي', to: 'موقف حدائق أكتوبر (دهشور / ابني بيتك)', kind: 'ride', fare: 12, minutes: 15, note: 'ميكروباص الحصري - حدائق أكتوبر' },
+        { from: 'موقف الحصري الرئيسي', to: 'ميدان الرماية / مشعل', kind: 'ride', fare: 18, minutes: 25, note: 'عبر طريق الواحات إلى الرماية ومشعل' },
+        { from: 'موقف الحصري الرئيسي', to: 'ميدان لبنان (مدخل محور 26 يوليو)', kind: 'ride', fare: 22, minutes: 30, note: 'مباشر عبر محور 26 يوليو' },
+        { from: 'تقاطع وصلة دهشور (ميدان جهينة / مول العرب)', to: 'موقف هايبر وان (مدخل زايد)', kind: 'ride', fare: 10, minutes: 10, note: 'امتداد محور 26 يوليو اتجاه هايبر وان' },
+        { from: 'تقاطع وصلة دهشور (ميدان جهينة / مول العرب)', to: 'موقف المستثمرين / الشباب', kind: 'ride', fare: 10, minutes: 8, note: 'مدخل زايد والمستثمرين من جهينة' },
+        { from: 'تقاطع وصلة دهشور (ميدان جهينة / مول العرب)', to: 'ميدان الرماية / مشعل', kind: 'ride', fare: 18, minutes: 22, note: 'عبر وصلة دهشور وطريق الواحات' },
+        { from: 'موقف المستثمرين / الشباب', to: 'موقف هايبر وان (مدخل زايد)', kind: 'ride', fare: 10, minutes: 10, note: 'سرفيس داخلي الشيخ زايد - هايبر' },
+        { from: 'موقف هايبر وان (مدخل زايد)', to: 'تقاطع محور 26 يوليو (الصحراوي)', kind: 'ride', fare: 10, minutes: 6, note: 'من أمام هايبر وان إلى تقاطع الصحراوي' },
+        { from: 'موقف هايبر وان (مدخل زايد)', to: 'ميدان لبنان (مدخل محور 26 يوليو)', kind: 'ride', fare: 18, minutes: 20, note: 'مباشر عبر محور 26 يوليو إلى ميدان لبنان' },
+        { from: 'تقاطع محور 26 يوليو (الصحراوي)', to: 'القرية الذكية (البوابة الرئيسية)', kind: 'ride', fare: 10, minutes: 7, note: 'طريق إسكندرية الصحراوي أمام القرية الذكية' },
+        { from: 'تقاطع محور 26 يوليو (الصحراوي)', to: 'ميدان لبنان (مدخل محور 26 يوليو)', kind: 'ride', fare: 18, minutes: 18, note: 'من فوق كوبري محور 26 يوليو اتجاه المهندسين' },
+        { from: 'موقف حدائق أكتوبر (دهشور / ابني بيتك)', to: 'ميدان الرماية / مشعل', kind: 'ride', fare: 15, minutes: 20, note: 'طريق الفيوم والواحات اتجاه صينية الرماية' },
+        { from: 'بوابة خوفو (البوابة الأولى - حدائق الأهرام)', to: 'ميدان الرماية / مشعل', kind: 'ride', fare: 10, minutes: 5, note: 'دقيقتين من أمام بوابة خوفو لميدان الرماية' },
+        { from: 'ميدان الرماية / مشعل', to: 'سلم المريوطية (تقاطع الدائري)', kind: 'ride', fare: 10, minutes: 10, note: 'شارع الهرم أو فيصل إلى المريوطية والدائري' }
+      ];
+
+      let linkedCount = 0;
+      OCTOBER_SEED_LINKS.forEach(item => {
+        const stA = stationMapByName[item.from];
+        const stB = stationMapByName[item.to];
+        if (!stA?.id || !stB?.id) return;
+
+        const id = linkDocId(stA.id, stB.id, false);
+        const dist = distanceBetween(stA, stB);
+        const linkRef = doc(db, LINKS_COLLECTION, id);
+
+        batch.set(linkRef, {
+          fromId: stA.id,
+          toId: stB.id,
+          kind: item.kind,
+          fare: item.fare,
+          minutes: item.minutes,
+          note: item.note,
+          oneWay: false,
+          distanceKm: dist != null ? Number(dist.toFixed(2)) : null,
+          status: 'approved',
+          approvedBy: user?.uid || 'admin_seed',
+          createdBy: user?.uid || 'admin_seed',
+          createdAt: Date.now(),
+          updatedAt: Date.now()
+        }, { merge: true });
+        linkedCount++;
+      });
+
+      await batch.commit();
+      triggerToast(`تم تجهيز ${addedStationsCount} نقطة جديدة وربط ${linkedCount} مسار تبادلي لأكتوبر وزايد بنجاح! 🎉🗺️`);
     } catch (e) {
-      triggerToast('حدث خطأ أثناء استيراد الداتا ❌');
+      console.error(e);
+      triggerToast('حدث خطأ أثناء استيراد وربط الداتا ❌');
     } finally {
       setIsSeedingData(false);
     }
