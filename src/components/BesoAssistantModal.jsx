@@ -340,13 +340,25 @@ const KIND_ICON = { ride: '🚐', bus: '🚌', metro: '🚇', walk: '🚶', micr
 const fareTxt = (e) => (e.fare == null ? 'أجرة غير مسجلة' : `${e.fare} ج`);
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 const locate = () => new Promise(resolve => {
-  if (typeof navigator === 'undefined' || !navigator.geolocation) return resolve(null);
+  if (typeof navigator === 'undefined' || !navigator.geolocation) { locate.lastError = 'unsupported'; return resolve(null); }
+  if (typeof window !== 'undefined' && window.isSecureContext === false) { locate.lastError = 'insecure'; return resolve(null); }
   navigator.geolocation.getCurrentPosition(
-    p => resolve([p.coords.latitude, p.coords.longitude]),
-    () => resolve(null),
-    { enableHighAccuracy: true, timeout: 8000, maximumAge: 60000 }
+    p => { locate.lastError = null; resolve([p.coords.latitude, p.coords.longitude]); },
+    err => { locate.lastError = (err && err.code) || 'unknown'; resolve(null); },
+    { enableHighAccuracy: false, timeout: 12000, maximumAge: 60000 }
   );
 });
+locate.lastError = null;
+
+// رسالة مفهومة لسبب فشل تحديد الموقع
+const locErrorText = (code) => {
+  if (code === 1) return 'إذن الموقع مرفوض. افتح إعدادات الموقع للمتصفح/التطبيق وفعّله، وبعدين اضغط "فعّل الموقع".';
+  if (code === 2) return 'مش قادر أحدد موقعك. اتأكد إن الـ GPS شغال في الجهاز وجرب تاني.';
+  if (code === 3) return 'تحديد الموقع أخد وقت طويل. جرب تاني.';
+  if (code === 'insecure') return 'الموقع بيشتغل بس على رابط HTTPS آمن.';
+  if (code === 'unsupported') return 'المتصفح/التطبيق ده مش بيدعم تحديد الموقع.';
+  return 'مقدرتش أحدد موقعك. جرب تاني.';
+};
 
 // يعرض **نص** بخط عريض بدل ما تظهر النجوم
 const RichText = ({ text }) => String(text || '').split(/(\*\*[^*]+\*\*)/g).map((p, i) =>
@@ -355,11 +367,13 @@ const RichText = ({ text }) => String(text || '').split(/(\*\*[^*]+\*\*)/g).map(
     : <React.Fragment key={i}>{p}</React.Fragment>
 );
 
-const BesoAssistantModal = ({ stations = [], isDarkMode, onClose, onSelectStation, userAreas = [], user, isAdmin }) => {
+const BesoAssistantModal = ({ stations = [], isDarkMode, onClose, onSelectStation, userAreas = [], user, isAdmin, userLocation = null }) => {
   const [input, setInput] = useState('');
   const [customGuides, setCustomGuides] = useState([]);
   const [links, setLinks] = useState([]);
   const [isTyping, setIsTyping] = useState(false);
+  const [locStatus, setLocStatus] = useState('idle'); // idle | loading | ok | denied
+  const [locError, setLocError] = useState(null);
 
   const [correctingMsgId, setCorrectingMsgId] = useState(null);
   const [correctionPlace, setCorrectionPlace] = useState('');
@@ -380,8 +394,8 @@ const BesoAssistantModal = ({ stations = [], isDarkMode, onClose, onSelectStatio
     {
       id: 'welcome',
       sender: 'beso',
-      text: `أهلاً بيك يا بطل! أنا "بيسو" 🤖 مساعدك الذكي في "طريقنا".\n\nأنا مربوط لحظياً بـ (${approvedStations.length}) موقف ونقطة تبادلية وبحسبلك **أسرع** و**أرخص** طريق بينهم، حتى لو محتاج تبديل أكتر من مرة 🔄\n\n🔹 جرب: **"من الدقي لأكتوبر"** أو **"أنا في المنيب ورايح هايبر وان"**\n🔹 أو اكتب اسم أي مكان وأقولك الخطوط اللي بتطلع منه.\n🔹 وبعد أي إجابة اطلب: **أرخص** / **أسرع** / **اعكس الاتجاه**.`,
-      suggestions: ['من الدقي لأكتوبر', 'أقرب موقف ليا 📍', 'النقاط التبادلية 🔄']
+      text: `أهلاً بيك يا بطل! أنا "بيسو" 🤖 مساعدك الذكي في "طريقنا".\n\nأنا مربوط لحظياً بـ (${approvedStations.length}) موقف ونقطة تبادلية وبحسبلك **أسرع** و**أرخص** طريق بينهم، حتى لو محتاج تبديل أكتر من مرة 🔄\n\n🔹 جرب: **"من الدقي لأكتوبر"** أو **"أنا في المنيب ورايح هايبر وان"**\n🔹 لو الموقع شغال، اكتب بس **"رايح الحصري"** وأنا أبدأ من مكانك لحد ما أقرب نقطة ليك.\n🔹 أو اكتب اسم أي مكان وأقولك الخطوط اللي بتطلع منه.\n🔹 وبعد أي إجابة اطلب: **أرخص** / **أسرع** / **اعكس الاتجاه**.`,
+      suggestions: ['أقرب موقف ليا 📍', 'من الدقي لأكتوبر', 'النقاط التبادلية 🔄']
     }
   ]);
   const messagesEndRef = useRef(null);
@@ -397,6 +411,46 @@ const BesoAssistantModal = ({ stations = [], isDarkMode, onClose, onSelectStatio
       setCustomGuides(snap.docs.map(d => ({ id: d.id, ...d.data() })));
     }, () => {});
     return () => unsub();
+  }, []);
+
+  // ------------------------------------------------------------------
+  // لوكيشن المستخدم: بيتاخد تلقائياً أول ما الشات يفتح (ويتجدد كل دقيقتين)
+  // ------------------------------------------------------------------
+  const normalizeCoords = (v) => {
+    if (!v) return null;
+    const la = Array.isArray(v) ? Number(v[0]) : Number(v.lat ?? v.latitude);
+    const ln = Array.isArray(v) ? Number(v[1]) : Number(v.lng ?? v.longitude);
+    return Number.isFinite(la) && Number.isFinite(ln) ? [la, ln] : null;
+  };
+
+  const ensureCoords = async (force = false) => {
+    const ctx = ctxRef.current;
+    const fromProp = normalizeCoords(userLocation);
+    if (fromProp && !force) { ctx.userCoords = fromProp; ctx.coordsAt = Date.now(); return fromProp; }
+    if (!force && ctx.userCoords && Date.now() - (ctx.coordsAt || 0) < 120000) return ctx.userCoords;
+    setLocStatus('loading');
+    const c = await locate();
+    if (c) { ctx.userCoords = c; ctx.coordsAt = Date.now(); setLocStatus('ok'); setLocError(null); return c; }
+    setLocError(locate.lastError);
+    setLocStatus(ctx.userCoords ? 'ok' : 'denied');
+    return ctx.userCoords || null;
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const fromProp = normalizeCoords(userLocation);
+      if (fromProp) { ctxRef.current.userCoords = fromProp; ctxRef.current.coordsAt = Date.now(); setLocStatus('ok'); return; }
+      try {
+        if (navigator.permissions?.query) {
+          const perm = await navigator.permissions.query({ name: 'geolocation' });
+          if (perm.state === 'denied') { if (!cancelled) { setLocError(1); setLocStatus('denied'); } return; }
+        }
+      } catch (e) { /* بعض المتصفحات مش بتدعم permissions */ }
+      if (!cancelled) await ensureCoords(true);
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // روابط الشبكة (المسارات بين المواقف) — بتتحدث لحظياً
@@ -427,7 +481,10 @@ const BesoAssistantModal = ({ stations = [], isDarkMode, onClose, onSelectStatio
     const lines = top.map(({ st }) => {
       const edges = (engine.adj.get(st.id) || []).slice().sort((a, b) => (a.fare ?? 99) - (b.fare ?? 99)).slice(0, 6);
       const conn = edges.map(e => `${engine.byId.get(e.to)?.name} (${fareTxt(e)}${e.minutes ? ` • ~${e.minutes} د` : ''})`).join('\n   • ');
-      return `${stationLine(st)} — ${st.location}` +
+      const uc = ctxRef.current.userCoords;
+      const dUser = uc ? engine.nearestTo(uc, 500, 500).find(x => x.st.id === st.id) : null;
+      const distTxt = dUser ? ` • 📏 ${dUser.d < 1 ? `${Math.round(dUser.d * 1000)} م` : `${dUser.d.toFixed(1)} كم`} منك` : '';
+      return `${stationLine(st)} — ${st.location}${distTxt}` +
         (st.transferHint ? `\n💡 ${st.transferHint}` : '') +
         (conn ? `\n🚐 بيوصلك مباشرة لـ:\n   • ${conn}` : '\n⚠️ مفيش خطوط مربوطة بالنقطة دي لسه.');
     });
@@ -522,12 +579,11 @@ const BesoAssistantModal = ({ stations = [], isDarkMode, onClose, onSelectStatio
         center = engine.coord.get(placeRes.candidates[0].st.id);
         centerLabel = engine.labelOf(placeRes);
       } else {
-        center = ctx.userCoords || await locate();
-        if (center) ctx.userCoords = center;
+        center = await ensureCoords();
         centerLabel = 'موقعك';
       }
       if (!center) {
-        return reply(`مقدرتش أحدد موقعك 📍 (ممكن إذن الموقع مقفول).\nاكتبلي أنت فين وأنا أطلعلك أقرب نقاط، مثلاً: **"أقرب موقف للدقي"**.`);
+        return reply(`📍 ${locErrorText(locate.lastError)}\nاكتبلي أنت فين وأنا أطلعلك أقرب نقاط، مثلاً: **"أقرب موقف للدقي"**.`);
       }
       const near = engine.nearestTo(center, 5, 25);
       if (!near.length) return reply(`مفيش مواقف مسجلة قريبة من (${centerLabel}) في الداتا لسه.`);
@@ -539,10 +595,9 @@ const BesoAssistantModal = ({ stations = [], isDarkMode, onClose, onSelectStatio
     }
 
     // 2) "استخدم موقعي" (بعد ما بيسو يسأل عن مكانك)
-    if (/(استخدم|حدد|خد|خذ)\s*موقعي|موقعي الحالي|مكاني الحالي/.test(nq)) {
-      const c = await locate();
-      if (!c) return reply(`مقدرتش أوصل لموقعك 😕 اكتبلي مكانك يدوي (مثال: **من الدقي**).`);
-      ctx.userCoords = c;
+    if (/^(استخدم|حدد|خد|خذ)\s*موقعي( الحالي)?$|^(موقعي|مكاني) الحالي$/.test(nq)) {
+      const c = await ensureCoords(true);
+      if (!c) return reply(`😕 ${locErrorText(locate.lastError)}\nأو اكتبلي مكانك يدوي (مثال: **من الدقي**).`);
       if (ctx.pendingDest) {
         const dRes = ctx.pendingDest; ctx.pendingDest = null;
         return routeReply(await fromMyLocation(c), dRes, null);
@@ -576,7 +631,10 @@ const BesoAssistantModal = ({ stations = [], isDarkMode, onClose, onSelectStatio
     // 5) متابعات: اعكس الاتجاه / أرخص / أسرع
     const pref = wantsPref(nq);
     const wantsFlip = /(اعكس|العكس|عكس|رجوع|ارجع|راجع)/.test(nq);
-    const parsed = engine.parse(queryText);
+    // "من موقعي" / "من هنا" → نقطة البداية هي لوكيشن المستخدم
+    const myLocRe = /(^| )(من )?(موقعي الحالي|مكاني الحالي|موقعي|هنا)( |$)/;
+    const useMyLoc = myLocRe.test(nq);
+    const parsed = engine.parse(useMyLoc ? nq.replace(myLocRe, ' ').trim() : queryText);
     const hasNewPlaces = !!(parsed.origin || parsed.dest || (parsed.place && parsed.place.candidates.length));
 
     if (ctx.last && !hasNewPlaces && (pref || wantsFlip)) {
@@ -605,10 +663,11 @@ const BesoAssistantModal = ({ stations = [], isDarkMode, onClose, onSelectStatio
     }
     if (origin && dest) { ctx.pendingOrigin = null; ctx.pendingDest = null; }
 
-    // وجهة بس: حاول تعرف نقطة البداية (GPS / منطقة المستخدم) وإلا اسأل
+    // وجهة بس (أو "من موقعي"): ناخد لوكيشن المستخدم تلقائياً
     if (dest && !origin) {
-      if (ctx.userCoords) {
-        return routeReply(await fromMyLocation(ctx.userCoords), dest, pref);
+      const myCoords = await ensureCoords();
+      if (myCoords) {
+        return routeReply(await fromMyLocation(myCoords), dest, pref);
       }
       const areaTxt = Array.isArray(userAreas) && typeof userAreas[0] === 'string' ? userAreas[0] : null;
       const areaRes = areaTxt ? engine.resolve(areaTxt) : null;
@@ -624,6 +683,12 @@ const BesoAssistantModal = ({ stations = [], isDarkMode, onClose, onSelectStatio
     }
 
     // بداية بس
+    if (useMyLoc && !origin && !dest && place) {
+      // "من موقعي لـ X" اتفهمت X كمكان وحيد
+      const myCoords = await ensureCoords();
+      if (myCoords) return withGuide(await routeReply(await fromMyLocation(myCoords), place, pref));
+    }
+
     if (origin && !dest) {
       ctx.pendingOrigin = origin;
       const info = describePlace(origin);
@@ -661,7 +726,7 @@ const BesoAssistantModal = ({ stations = [], isDarkMode, onClose, onSelectStatio
       text: 'موقعك الحالي',
       label: 'موقعك الحالي',
       score: 1,
-      candidates: near.map(x => ({ st: x.st, score: 1, extra: Math.round(x.d / 4.5 * 60) }))
+      candidates: near.map(x => ({ st: x.st, score: 1, extra: Math.round(x.d / 4.5 * 60), dKm: x.d }))
     };
   };
 
@@ -674,6 +739,14 @@ const BesoAssistantModal = ({ stations = [], isDarkMode, onClose, onSelectStatio
     const planResult = engine.plan(oRes, dRes);
     ctx.last = { o: oRes, d: dRes, pref: pref || (ctx.last && ctx.last.pref) || 'fast' };
     const out = formatRoute(oRes, dRes, planResult, pref || 'fast');
+    if (oRes.label === 'موقعك الحالي' && !planResult.same && planResult.options.length) {
+      const startId = (planResult.options.find(o => o.tags.includes(pref || 'fast')) || planResult.options[0]).edges[0].from;
+      const c = oRes.candidates.find(x => x.st.id === startId);
+      if (c) {
+        const dist = c.dKm < 1 ? `${Math.round(c.dKm * 1000)} م` : `${c.dKm.toFixed(1)} كم`;
+        out.text = `📍 **من موقعك الحالي** — أقرب نقطة ليك: **${c.st.name}** (${dist}${c.extra ? ` • ~${c.extra} د مشي` : ''})\n\n${out.text}`;
+      }
+    }
     const sugg = [];
     if (planResult.options.length > 1) {
       if (!planResult.options[0].tags.includes('cheap') || !pref) sugg.push('💰 أرخص طريق');
@@ -759,11 +832,29 @@ const BesoAssistantModal = ({ stations = [], isDarkMode, onClose, onSelectStatio
                 <h3 className="font-black text-sm">المساعد الذكي "بيسو"</h3>
                 <span className="text-xs font-black bg-amber-400 text-slate-950 px-1.5 py-0.5 rounded-full flex items-center gap-0.5"><Sparkles size={9}/> Live GIS</span>
               </div>
-              <p className="text-xs text-indigo-100 font-bold">أسرع وأرخص طريق بين {approvedStations.length} نقطة 🧠</p>
+              <p className="text-xs text-indigo-100 font-bold">
+                {locStatus === 'ok' ? '📍 شايف موقعك — اسألني رايح فين' : locStatus === 'loading' ? '⏳ بحدد موقعك...' : locStatus === 'denied' ? '📍 الموقع مقفول — اكتب مكانك' : `أسرع وأرخص طريق بين ${approvedStations.length} نقطة 🧠`}
+              </p>
             </div>
           </div>
           <button aria-label="إغلاق" onClick={onClose} className="p-2.5 bg-white/15 hover:bg-rose-500 rounded-full transition-colors"><X size={18} /></button>
         </div>
+
+        {locStatus !== 'ok' && (
+          <div className={`px-3 py-2 shrink-0 flex items-center justify-between gap-2 border-b text-xs font-bold ${isDarkMode ? 'bg-amber-500/10 border-amber-500/30 text-amber-200' : 'bg-amber-50 border-amber-200 text-amber-800'}`}>
+            <span className="leading-snug">
+              {locStatus === 'loading' ? '⏳ بحدد موقعك... وافق على الإذن لو ظهرلك.' : (locStatus === 'denied' ? locErrorText(locError) : '📍 فعّل الموقع عشان أحسبلك الطريق من مكانك.')}
+            </span>
+            <button
+              type="button"
+              disabled={locStatus === 'loading'}
+              onClick={() => ensureCoords(true)}
+              className="shrink-0 px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-slate-950 font-black"
+            >
+              📍 فعّل الموقع
+            </button>
+          </div>
+        )}
 
         <div className={`flex-1 min-h-0 overflow-y-auto p-3.5 space-y-3 [&::-webkit-scrollbar]:hidden ${isDarkMode ? 'bg-slate-950/50' : 'bg-slate-50/70'}`}>
           {messages.map((msg) => {
