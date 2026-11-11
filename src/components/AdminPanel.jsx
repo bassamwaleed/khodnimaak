@@ -45,6 +45,12 @@ const SEED_NODES = [
   ['dreamland', 'موقف دريم لاند / الواحات', 'station', 'مدينة 6 أكتوبر', 29.978, 30.847, 'موقف على طريق الواحات للقادم من دريم وبيفرلي.'],
   ['hadayek_oct', 'موقف حدائق أكتوبر (دهشور / ابني بيتك)', 'station', 'حدائق أكتوبر', 29.9092, 31.0086, 'موقف حدائق أكتوبر على طريق الفيوم.'],
 
+  ['wahat_sq', 'صينية الواحات', 'hub', 'مدينة 6 أكتوبر', 29.979, 30.9665, 'نقطة تبادلية على طريق الواحات. من الحصري اركب عربيات 600 أو ميكروباصات دجلة (أ / ب / ج) وانزل في الصينية، ومنها مواصلات لفيصل والهرم وهايبر وان والفيوم.'],
+  ['hay1', 'الحي الأول (6 أكتوبر)', 'stop', 'مدينة 6 أكتوبر', 29.965, 30.956, 'سرفيس داخلي قصير من موقف الحصري.'],
+  ['hay7', 'الحي السابع', 'stop', 'مدينة 6 أكتوبر', 29.942, 30.931, 'سرفيس داخلي من الحصري وموقف ليلة القدر.'],
+  ['ind4', 'المنطقة الصناعية الرابعة', 'stop', 'مدينة 6 أكتوبر', 29.933, 30.899, 'سرفيس للعمال والمصانع من موقف ليلة القدر.'],
+  ['fayoum', 'موقف الفيوم', 'station', 'الفيوم', 29.3084, 30.8428, 'موقف الفيوم الرئيسي، ميكروباصات لصينية الواحات وحدائق أكتوبر.'],
+
   // ---------------- الشيخ زايد ----------------
   ['hyper', 'موقف هايبر وان (الشيخ زايد)', 'station', 'الشيخ زايد', 30.0385, 31.0022, 'أكبر نقطة تجمع في الشيخ زايد أمام هايبر وان.'],
   ['investors', 'موقف المستثمرين / الشباب', 'station', 'الشيخ زايد', 30.0362, 30.9615, 'موقف داخلي وخارجي يخدم أحياء الشيخ زايد.'],
@@ -86,6 +92,17 @@ const SEED_NODES = [
 
 // الروابط: [من, إلى, أجرة, دقائق]  (ثنائية الاتجاه)
 const SEED_LINK_ROWS = [
+  // صينية الواحات: [من, إلى, أجرة, دقائق, وصف الخط, تلميح الركوب من أول نقطة, تلميح الركوب من التانية]
+  ['hosary', 'wahat_sq', 10, 12, 'اركب عربيات 600 أو ميكروباصات دجلة (أ / ب / ج) وانزل في صينية الواحات.', 'من موقف الحصري: طابور عربيات 600 وميكروباصات دجلة أ / ب / ج', 'من صينية الواحات: عربيات 600 أو دجلة (أ / ب / ج) اتجاه الحصري'],
+  ['wahat_sq', 'faisal', 15, 30, 'ميكروباصات فيصل من صينية الواحات.', 'من صينية الواحات: ميكروباصات اتجاه فيصل', 'من موقف فيصل: ميكروباصات الواحات / أكتوبر'],
+  ['wahat_sq', 'pyramids', 15, 30, 'ميكروباصات الهرم من صينية الواحات.', 'من صينية الواحات: ميكروباصات اتجاه الهرم', 'من الهرم: ميكروباصات الواحات / أكتوبر'],
+  ['wahat_sq', 'hyper', 8, 12, 'مواصلات هايبر وان من صينية الواحات.', 'من صينية الواحات: مواصلات اتجاه هايبر وان', 'من هايبر وان: مواصلات اتجاه صينية الواحات'],
+  ['wahat_sq', 'fayoum', 40, 90, 'ميكروباصات الفيوم من صينية الواحات.', 'من صينية الواحات: ميكروباصات اتجاه الفيوم', 'من موقف الفيوم: ميكروباصات اتجاه أكتوبر وصينية الواحات'],
+  ['wahat_sq', 'moe', 5, 6], ['wahat_sq', 'moa', 8, 10], ['wahat_sq', 'remaya', 15, 22], ['wahat_sq', 'hadayek_oct', 12, 15],
+  ['fayoum', 'hadayek_oct', 30, 70, 'ميكروباص الفيوم - حدائق أكتوبر على طريق الفيوم.'],
+  // أحياء أكتوبر
+  ['hosary', 'hay1', 6, 6], ['hosary', 'hay7', 8, 10], ['layla', 'hay7', 6, 6], ['layla', 'ind4', 8, 10],
+  ['hay1', 'distinguished', 5, 5], ['hay1', 'univ', 6, 6], ['hay7', 'univ', 6, 6], ['hay1', 'moa', 8, 10],
   // أكتوبر الداخلية
   ['hosary','layla',10,10], ['hosary','moa',10,12], ['hosary','moe',8,8], ['hosary','juhayna',10,12],
   ['hosary','distinguished',8,8], ['hosary','univ',8,8], ['hosary','zewail',10,12], ['hosary','dreamland',15,20],
@@ -126,25 +143,25 @@ const SEED_LINK_ROWS = [
 const _nodeByKey = Object.fromEntries(SEED_NODES.map(n => [n[0], n]));
 
 // الروابط بالأسماء (بتتحوّل لـ IDs وقت التنفيذ)
-export const SEED_LINKS = SEED_LINK_ROWS.map(([a, b, fare, minutes]) => ({
+export const SEED_LINKS = SEED_LINK_ROWS.map(([a, b, fare, minutes, note]) => ({
   from: _nodeByKey[a][1],
   to: _nodeByKey[b][1],
   kind: 'ride',
   fare,
   minutes,
-  note: `${_nodeByKey[a][1]} ⇄ ${_nodeByKey[b][1]}`
+  note: note || `${_nodeByKey[a][1]} ⇄ ${_nodeByKey[b][1]}`
 }));
 
 // المواقف بشكلها النهائي + الخطوط (routes) متولدة تلقائياً من الروابط
 export const OCTOBER_ZAYED_SEED_DATA = SEED_NODES.map(([key, name, nodeType, location, lat, lng, transferHint]) => {
   const routes = SEED_LINK_ROWS
     .filter(([a, b]) => a === key || b === key)
-    .map(([a, b, fare]) => {
+    .map(([a, b, fare, , , hAB, hBA]) => {
       const other = _nodeByKey[a === key ? b : a];
       return {
         destination: other[3],
         destinationDetails: other[1],
-        boardingHint: '',
+        boardingHint: (a === key ? hAB : hBA) || '',
         fare: String(fare),
         status: 'approved',
         crowdStatus: 'normal'
@@ -230,17 +247,17 @@ const AdminPanel = ({ isDarkMode, onClose, triggerToast, appSettings, user, open
   // استرداد داتا أكتوبر وزايد والجيزة والقاهرة الكبرى + ربطها ببعضها على الخريطة
   // (بيمسح الداتا القديمة الجاية من الـ seed وروابطها الأول، وبعدين يضيف الجديدة)
   const handleSeedOctoberZayedData = async () => {
-    if (!window.confirm('هيتم مسح داتا الـ seed القديمة وروابطها، وإضافة المواقف والروابط الجديدة على الخريطة. متأكد؟')) return;
+    if (!window.confirm('هيتم استبدال المواقف اللي بنفس أسماء الـ seed (وأي تعديل يدوي عليها هيضيع) وروابطها بالنسخة الجديدة. متأكد؟')) return;
     setIsSeedingData(true);
     try {
       const ops = []; // كل عملية: (batch) => void  — بنقسمها على دفعات (حد فايربيز 500)
-      const legacy = new Set(LEGACY_SEED_NAMES.map(n => n.trim()));
+      const legacy = new Set([...LEGACY_SEED_NAMES, ...OCTOBER_ZAYED_SEED_DATA.map(n => n.name)].map(n => n.trim()));
 
       // 1. تحديد المواقف القديمة اللي هتتمسح
       const toDeleteIds = new Set();
       const stationMapByName = {};
       stationsList.forEach(st => {
-        const isOld = st.addedBy === 'admin_seed' || (st.name && legacy.has(st.name.trim()));
+        const isOld = st.addedBy === 'admin_seed' || st.seedSource || (st.name && legacy.has(st.name.trim()));
         if (isOld) toDeleteIds.add(st.id);
         else if (st.name) stationMapByName[st.name.trim()] = st;
       });
@@ -265,6 +282,7 @@ const AdminPanel = ({ isDarkMode, onClose, triggerToast, appSettings, user, open
         const newDocRef = doc(collection(db, STATIONS_COLLECTION));
         const stationObj = {
           ...seedItem,
+          seedSource: 'october_zayed_v3',
           status: 'approved',
           addedBy: user?.uid || 'admin_seed',
           crowdStatus: 'normal',
