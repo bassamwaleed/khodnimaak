@@ -16,7 +16,7 @@ import StationModal from './components/StationModal';
 import PublicProfileModal from './components/PublicProfileModal';
 
 import { SUPPORTED_AREAS } from './utils/gisConstants';
-export { SUPPORTED_AREAS }; // re-export للتوافق مع StationModal/HomeScreen
+export { SUPPORTED_AREAS };
 
 export const NEARBY_AREAS_MAP = {
   'حدائق أكتوبر': ['مدينة 6 أكتوبر', 'حدائق الأهرام', 'الشيخ زايد', 'الهرم', 'فيصل'],
@@ -62,10 +62,7 @@ export default function App() {
   const [filterType, setFilterType] = useState('offer'); 
   const [isScrolling, setIsScrolling] = useState(false);
 
-  // حالة فتح البروفايل العام لأي مستخدم
   const [publicProfileUserId, setPublicProfileUserId] = useState(null);
-
-  // حالات طي وفتح الأقسام الاختيارية في فورم إضافة رحلة لتقصير الفورم على الموبايل
   const [showRouteSelector, setShowRouteSelector] = useState(false);
   const [showExtraPrefs, setShowExtraPrefs] = useState(false);
 
@@ -126,7 +123,7 @@ export default function App() {
 
   const [realTrips, setRealTrips] = useState([]); 
   const [stations, setStations] = useState([]); 
-  const [links, setLinks] = useState([]); // روابط التبادل بين المواقف (معتمدة + اقتراحات)
+  const [links, setLinks] = useState([]); 
   const [myInbox, setMyInbox] = useState([]);
   const [appSettings, setAppSettings] = useState({ logo: null, banners: [], bannerText: '' });
   
@@ -190,7 +187,6 @@ export default function App() {
 
   const { getMyCity, isLocating, locationError } = useEgyptianLocation();
 
-  // فتح التطبيق فوراً بدون انتظار getDoc من الشبكة لتسريع التحميل الأولي
   useEffect(() => {
     let unsubUserDoc = null;
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
@@ -288,7 +284,6 @@ export default function App() {
     return () => unsubscribe();
   }, [user]);
 
-  // روابط التبادل — لو القواعد منعت القراءة نكمل من غيرها بهدوء
   useEffect(() => {
     if (!user) { setLinks([]); return undefined; }
     const unsubscribe = onSnapshot(
@@ -518,7 +513,6 @@ export default function App() {
     } catch (error) { triggerToast('حدث خطأ.'); } finally { setIsSubmitting(false); }
   };
 
-  // شات الرحلات الشخصي مع دعم فتح التفاوض المباشر إذا ضغط على زر (تفاوض) من الكارت
   const openChatFromTrip = async (trip) => {
     if (!trip || typeof trip !== 'object' || !trip.userId || !trip.id) {
       triggerToast('عذراً، بيانات هذه الرحلة غير مكتملة أو بها خلل.');
@@ -606,7 +600,6 @@ export default function App() {
     }
   };
 
-  // شات الإدارة الرسمي المنفصل تماماً عن حساب الأدمن الشخصي
   const openAdminChat = async (targetUser) => {
     if (!user || isGuest || !targetUser?.id) return;
     try {
@@ -653,7 +646,6 @@ export default function App() {
     }
   };
 
-  // إدارة الطلبات المتعددة وشروط المقاعد والتفاوض على السعر
   const handleTripAction = async (chatInfo, actionType, actionPayload = null) => {
     if (!chatInfo || typeof chatInfo !== 'object' || !chatInfo.chatId || !user) return;
     if (checkUserRestriction('chat') && chatInfo.tripId !== 'system') return;
@@ -674,7 +666,6 @@ export default function App() {
       const proposedPriceVal = actionPayload?.proposedPrice !== undefined ? Number(actionPayload.proposedPrice) : (chatInfo.proposedPrice ? Number(chatInfo.proposedPrice) : null);
       const originalPriceVal = Number(chatInfo.tripOriginalPrice || 0);
 
-      // الشرط 1: منع إرسال أكثر من 3 طلبات معلقة (pending) في نفس الوقت لنفس المستخدم
       if (actionType === 'request') {
         const myPendingRequests = (myInbox || []).filter(
           c => c.requestStatus === 'pending' && c.requestSenderId === user.uid && c.chatId !== chatId
@@ -685,7 +676,6 @@ export default function App() {
         }
       }
 
-      // الشرط 2: التحقق من توافر عدد المقاعد المطلوبة في الرحلة قبل الإرسال أو القبول
       if ((actionType === 'request' || actionType === 'accept' || actionType === 'accept_original_price') && chatInfo.tripId && chatInfo.tripId !== 'system') {
         const tripRef = doc(db, APP_COLLECTION_NAME, chatInfo.tripId);
         const tripSnap = await getDoc(tripRef);
@@ -897,13 +887,12 @@ export default function App() {
   return (
     <div dir="rtl" style={{ fontFamily: "'Tajawal', system-ui, -apple-system, 'Segoe UI', sans-serif" }} className={`app-root min-h-screen flex flex-col relative transition-colors duration-300 ${bgMain} overflow-x-hidden pb-0`}>
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;500;700;800;900&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800;900&display=swap');
         .app-root :focus-visible { outline: 2px solid #6366f1; outline-offset: 2px; }
         @media (prefers-reduced-motion: reduce) { .app-root * { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; } }
       `}</style>
       {toastMsg && ( <div className="fixed top-24 left-1/2 transform -translate-x-1/2 z-[999] bg-slate-900 text-white px-6 py-3 rounded-full shadow-2xl flex items-center gap-3 border border-slate-700"><CheckCircle2 size={18} className="text-emerald-400" /><p className="text-sm font-bold whitespace-nowrap">{toastMsg}</p></div> )}
 
-      {/* نافذة البروفايل العام لأي مستخدم */}
       {publicProfileUserId && (
         <PublicProfileModal
           targetUserId={publicProfileUserId}
@@ -1008,7 +997,6 @@ export default function App() {
         </div>
       )}
 
-      {/* الهيدر: صف واحد — الهوية (يمين) | المنطقة (وسط) | الإشعارات والحساب (يسار) */}
       <header className={`sticky top-0 z-40 border-b ${isDarkMode ? 'bg-slate-950/90 border-slate-800/80' : 'bg-white/90 border-slate-200/70'} backdrop-blur-xl pointer-events-auto`}>
         <div className="max-w-6xl mx-auto px-3 sm:px-6 h-16 flex items-center gap-2 sm:gap-3 w-full">
 
@@ -1146,7 +1134,6 @@ export default function App() {
         </div>
       )}
 
-      {/* الزر العائم لإضافة رحلة على اليمين */}
       {activeTab === 'home' && !isGuest && (
         <button 
           onClick={() => {
@@ -1162,7 +1149,6 @@ export default function App() {
         </button>
       )}
 
-      {/* نافذة إضافة رحلة بتصميم مدمج قابل للطي (Accordion) لسهولة الاستخدام على الموبايل */}
       {showAddModal && !isGuest && (
         <div className="fixed inset-0 bg-slate-900/90 backdrop-blur-sm z-[200] flex justify-center items-end sm:items-center p-0 sm:p-4 pointer-events-auto">
           <div className={`${bgCard} w-full sm:max-w-md max-h-[90vh] sm:max-h-[85vh] rounded-t-[2rem] sm:rounded-3xl shadow-2xl flex flex-col overflow-hidden animate-fade-in-up border dark:border-slate-700`}>
@@ -1172,7 +1158,6 @@ export default function App() {
             </div>
             
             <div className="flex-1 overflow-y-auto p-4 space-y-3.5 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
-              {/* التبديل بين سفر وأمانات + سائق وراكب */}
               <div className="grid grid-cols-2 gap-2">
                 <div className="flex bg-slate-100 dark:bg-slate-800 p-1 rounded-xl">
                   <button type="button" onClick={() => setNewTrip({...newTrip, category: 'travel'})} className={`flex-1 py-2 rounded-lg text-xs font-black transition-all ${newTrip.category === 'travel' ? 'bg-white text-indigo-600 shadow-sm dark:bg-slate-700 dark:text-white' : 'text-slate-500'}`}>🚗 سفر</button>
@@ -1190,7 +1175,6 @@ export default function App() {
               </div>
 
               <form id="addTripForm" onSubmit={handleAddTrip} className="space-y-3">
-                {/* نقطة الانطلاق */}
                 <div className="space-y-1.5">
                   <div className="flex justify-between items-center px-1">
                     <label className="text-xs font-black text-slate-500">📍 نقطة الانطلاق</label>
@@ -1209,7 +1193,6 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* نقطة الوصول */}
                 <div className="space-y-1.5">
                   <label className="text-xs font-black text-slate-500 px-1">🏁 نقطة الوصول</label>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
@@ -1221,7 +1204,6 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* قسم قابل للطي 1: خط السير والمناطق الوسطية */}
                 <div className="rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden">
                   <button
                     type="button"
@@ -1283,7 +1265,6 @@ export default function App() {
                   )}
                 </div>
 
-                {/* التاريخ والوقت والمقاعد والتكلفة */}
                 <div className="grid grid-cols-2 gap-2.5">
                   <div className="space-y-1">
                     <label className="text-xs font-bold text-slate-500 px-1">تاريخ الرحلة *</label>
@@ -1303,7 +1284,6 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* طريقة التواصل المفضلة */}
                 <div className="space-y-1.5 pt-1">
                   <label className="text-xs font-black text-slate-700 dark:text-slate-200 flex items-center gap-1 px-1">
                     <Phone size={13} className="text-indigo-500"/> طريقة التواصل على الكارت
@@ -1336,7 +1316,6 @@ export default function App() {
                   )}
                 </div>
 
-                {/* قسم قابل للطي 2: التفضيلات الإضافية (بنات فقط، تكييف، وملاحظات) */}
                 <div className="rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden">
                   <button
                     type="button"
