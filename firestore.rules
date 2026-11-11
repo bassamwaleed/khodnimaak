@@ -1,0 +1,50 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function isGuestUser() { return request.auth.token.firebase.sign_in_provider == 'anonymous'; }
+    // الأفضل لاحقاً: custom claim (request.auth.token.admin == true) بدل الإيميل
+    function isAdmin() {
+      return signedIn() && request.auth.token.email == 'bassamwaleed2000@gmail.com';
+    }
+
+    // ── روابط التبادل بين النقاط ──
+    function validLink() {
+      let d = request.resource.data;
+      return d.keys().hasOnly(['fromId','toId','kind','fare','minutes','note','oneWay','distanceKm',
+                               'status','suggestedBy','suggestedByName','createdBy','createdAt','updatedAt',
+                               'approvedBy','approvedAt'])
+        && d.fromId is string && d.toId is string && d.fromId != d.toId
+        && d.kind in ['walk', 'ride', 'same']
+        && d.fare is number && d.fare >= 0 && d.fare <= 500
+        && (d.note is string && d.note.size() <= 200);
+    }
+
+    match /khodni_maak_links/{linkId} {
+      allow read: if signedIn();
+
+      // الأدمن: كتابة وتعديل وحذف كامل (الاعتماد = status 'approved')
+      allow create, update: if isAdmin() && validLink();
+      allow delete: if isAdmin();
+
+      // المستخدم العادي (مش ضيف): اقتراح جديد فقط، حالته pending وباسمه.
+      // create بس → مستحيل يعدّل أو يستبدل رابط موجود/معتمد.
+      allow create: if signedIn() && !isGuestUser() && validLink()
+        && request.resource.data.status == 'pending'
+        && request.resource.data.suggestedBy == request.auth.uid
+        && request.resource.data.createdBy == request.auth.uid;
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    // مهم: ادمج الجزء ده مع قواعدك الحالية (متستبدلهاش).
+    // الصور بقت في Storage (storage.rules) — وثائق المستخدمين مبقاش فيها idFront/idBack/licenseImage
+    // بعد ما تشغّل «نقل الصور إلى Storage» من لوحة الأدمن ← الإعدادات.
+    //
+    // اتأكد كمان إن المستخدم مايقدرش يوثّق نفسه: في قاعدة update لوثيقة المستخدم امنع تعديل
+    // الحقول الحساسة، مثال (عدّل أسماء الحقول حسب مشروعك):
+    //   !request.resource.data.diff(resource.data).affectedKeys()
+    //       .hasAny(['isVerified','customBadge','completedTripsCount'])
+    // ══════════════════════════════════════════════════════════════
+  }
+}

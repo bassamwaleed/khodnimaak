@@ -1,0 +1,21 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    function isAdmin() {
+      return request.auth != null && request.auth.token.email == 'bassamwaleed2000@gmail.com';
+    }
+
+    // صور التوثيق: المالك يرفع ويقرأ، والأدمن يقرأ ويكتب (للنقل)، غير كده ممنوع.
+    match /verification/{uid}/{file} {
+      allow read: if request.auth != null && (request.auth.uid == uid || isAdmin());
+
+      allow create, update: if request.auth != null && request.auth.uid == uid
+        && file.matches('(front|back|license)[.]jpg')
+        && request.resource.size < 3 * 1024 * 1024
+        && request.resource.contentType == 'image/jpeg';
+
+      allow create, update, delete: if isAdmin();
+    }
+  }
+}
