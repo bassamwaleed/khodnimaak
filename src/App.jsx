@@ -190,9 +190,10 @@ export default function App() {
 
   const { getMyCity, isLocating, locationError } = useEgyptianLocation();
 
+  // فتح التطبيق فوراً بدون انتظار getDoc من الشبكة لتسريع التحميل الأولي
   useEffect(() => {
     let unsubUserDoc = null;
-    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
       try {
         if (unsubUserDoc) { unsubUserDoc(); unsubUserDoc = null; }
         if (currentUser) {
@@ -202,48 +203,44 @@ export default function App() {
             setUserData(null); 
             setIsAdmin(false); 
             setLoading(false);
-          } 
-          else {
-            setIsGuest(false); setIsAdmin(currentUser.email && currentUser.email.toLowerCase() === ADMIN_EMAIL);
-            const userRef = doc(db, USERS_COLLECTION, currentUser.uid);
-            const userDoc = await getDoc(userRef);
-            if (!userDoc.exists()) {
-              const initialData = { 
-                name: currentUser.displayName || 'مستخدم', 
-                photoURL: null, 
-                isVerified: false, 
-                verificationStatus: 'none', 
-                completedTripsCount: 0, 
-                phone: currentUser.email?.split('@')[0] || '', 
-                gender: 'male',
-                accountRole: 'passenger',
-                reviews: [],
-                createdAt: Date.now() 
-              };
-              await setDoc(userRef, initialData, { merge: true });
-              if (localStorage.getItem('khodnimaak_hide_area_modal') !== 'true' && getInitialAreas().length === 0) {
-                setShowAreaModal(true);
-              }
-            } else {
-              const existingUserData = userDoc.data();
-              const hasSavedAreas = (Array.isArray(existingUserData?.preferredAreas) && existingUserData.preferredAreas.length > 0) || getInitialAreas().length > 0;
-              if (localStorage.getItem('khodnimaak_hide_area_modal') !== 'true' && !hasSavedAreas) {
-                setShowAreaModal(true);
-              }
-            }
+          } else {
+            setIsGuest(false);
+            setIsAdmin(Boolean(currentUser.email && currentUser.email.toLowerCase() === ADMIN_EMAIL));
+            setLoading(false);
 
-            unsubUserDoc = onSnapshot(userRef, (snap) => {
+            const userRef = doc(db, USERS_COLLECTION, currentUser.uid);
+            unsubUserDoc = onSnapshot(userRef, async (snap) => {
               if (snap.exists()) {
                 const data = snap.data();
                 setUserData(data);
+                const hasSavedAreas = (Array.isArray(data?.preferredAreas) && data.preferredAreas.length > 0) || getInitialAreas().length > 0;
+                if (localStorage.getItem('khodnimaak_hide_area_modal') !== 'true' && !hasSavedAreas) {
+                  setShowAreaModal(true);
+                }
                 if (Array.isArray(data.preferredAreas) && data.preferredAreas.length > 0 && localStorage.getItem('khodnimaak_areas_list') === null) {
                   setUserAreas(data.preferredAreas);
                   setTempSelectedAreas(data.preferredAreas);
                   setUserArea(data.preferredAreas.join('، '));
                 }
+              } else {
+                const initialData = { 
+                  name: currentUser.displayName || 'مستخدم', 
+                  photoURL: null, 
+                  isVerified: false, 
+                  verificationStatus: 'none', 
+                  completedTripsCount: 0, 
+                  phone: currentUser.email?.split('@')[0] || '', 
+                  gender: 'male',
+                  accountRole: 'passenger',
+                  reviews: [],
+                  createdAt: Date.now() 
+                };
+                try { await setDoc(userRef, initialData, { merge: true }); } catch (e) {}
+                if (localStorage.getItem('khodnimaak_hide_area_modal') !== 'true' && getInitialAreas().length === 0) {
+                  setShowAreaModal(true);
+                }
               }
-              setLoading(false);
-            });
+            }, () => setLoading(false));
           }
         } else {
           setUser(null); setUserData(null); setIsGuest(false); setIsAdmin(false);
@@ -900,7 +897,7 @@ export default function App() {
   return (
     <div dir="rtl" style={{ fontFamily: "'Tajawal', system-ui, -apple-system, 'Segoe UI', sans-serif" }} className={`app-root min-h-screen flex flex-col relative transition-colors duration-300 ${bgMain} overflow-x-hidden pb-0`}>
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800;900&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;500;700;800;900&display=swap');
         .app-root :focus-visible { outline: 2px solid #6366f1; outline-offset: 2px; }
         @media (prefers-reduced-motion: reduce) { .app-root * { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; } }
       `}</style>
