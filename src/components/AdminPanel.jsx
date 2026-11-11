@@ -27,194 +27,142 @@ export const ADMIN_BADGE_OPTIONS = [
   { id: 'كابتن ذهبي 💎', label: 'كابتن ذهبي 💎', color: 'bg-amber-100 text-amber-800 border-amber-300' }
 ];
 
-export const OCTOBER_ZAYED_SEED_DATA = [
-  {
-    name: 'موقف الحصري الرئيسي',
-    nodeType: 'station',
-    location: 'مدينة 6 أكتوبر',
-    governorate: 'الجيزة',
-    lat: 29.9723,
-    lng: 30.9428,
-    mapUrl: 'https://www.google.com/maps?q=29.9723,30.9428',
-    transferHint: 'الموقف الرئيسي بجوار مسجد الحصري، متفرع منه خطوط لكل مناطق القاهرة والجيزة والداخلي.',
-    routes: [
-      { destination: 'وسط البلد', destinationDetails: 'رمسيس / الإسعاف', boardingHint: 'من داخل موقف الحصري عبر محور 26 يوليو', fare: '25', status: 'approved', crowdStatus: 'normal' },
-      { destination: 'الدقي', destinationDetails: 'ميدان الجيزة / الدقي', boardingHint: 'بجوار سور الموقف اتجاه المحور', fare: '22', status: 'approved', crowdStatus: 'normal' },
-      { destination: 'المهندسين', destinationDetails: 'ميدان لبنان / جامعة الدول', boardingHint: 'موقف الحصري بوابة المحور', fare: '22', status: 'approved', crowdStatus: 'normal' },
-      { destination: 'الهرم', destinationDetails: 'الرماية / مشعل / فيصل', boardingHint: 'طريق الواحات من الحصري', fare: '20', status: 'approved', crowdStatus: 'normal' },
-      { destination: 'الشيخ زايد', destinationDetails: 'هايبر وان / المستثمرين', boardingHint: 'سرفيس داخلي أمام مسجد الحصري', fare: '12', status: 'approved', crowdStatus: 'normal' },
-      { destination: 'حدائق أكتوبر', destinationDetails: 'طريق الفيوم / ابني بيتك / دجلة', boardingHint: 'موقف السرفيس الداخلي بالحصري', fare: '12', status: 'approved', crowdStatus: 'normal' }
-    ]
-  },
-  {
-    name: 'موقف ليلة القدر (الحي السادس)',
-    nodeType: 'station',
-    location: 'مدينة 6 أكتوبر',
-    governorate: 'الجيزة',
-    lat: 29.9525,
-    lng: 30.9138,
-    mapUrl: 'https://www.google.com/maps?q=29.9525,30.9138',
-    transferHint: 'الموقف المركزي لأكتوبر والأقاليم وموقف السلام وعبود.',
-    routes: [
-      { destination: 'وسط البلد', destinationDetails: 'موقف عبد المنعم رياض / رمسيس', boardingHint: 'من داخل موقف السادس', fare: '27', status: 'approved', crowdStatus: 'normal' },
-      { destination: 'مدينة نصر', destinationDetails: 'موقف السلام / العاشر', boardingHint: 'خطوط الدائري والسلام من السادس', fare: '30', status: 'approved', crowdStatus: 'normal' },
-      { destination: 'مدينة السادات', destinationDetails: 'السادات / الخطاطبة', boardingHint: 'بوابة الأقاليم بموقف السادس', fare: '35', status: 'approved', crowdStatus: 'normal' },
-      { destination: 'شبين الكوم', destinationDetails: 'شبين الكوم / المنوفية', boardingHint: 'موقف الأقاليم بالحي السادس', fare: '45', status: 'approved', crowdStatus: 'normal' },
-      { destination: 'مدينة 6 أكتوبر', destinationDetails: 'الحصري / مول العرب', boardingHint: 'سرفيس داخلي من أمام الموقف', fare: '10', status: 'approved', crowdStatus: 'normal' }
-    ]
-  },
-  {
-    name: 'موقف هايبر وان (مدخل زايد)',
-    nodeType: 'station',
-    location: 'الشيخ زايد',
-    governorate: 'الجيزة',
-    lat: 30.0385,
-    lng: 31.0022,
-    mapUrl: 'https://www.google.com/maps?q=30.0385,31.0022',
-    transferHint: 'أكبر نقطة تجمع في الشيخ زايد على محور 26 يوليو أمام هايبر وان.',
-    routes: [
-      { destination: 'المهندسين', destinationDetails: 'ميدان لبنان / المهندسين', boardingHint: 'من أمام هايبر وان اتجاه المحور', fare: '18', status: 'approved', crowdStatus: 'normal' },
-      { destination: 'وسط البلد', destinationDetails: 'رمسيس / التحرير', boardingHint: 'أمام كوبرى المشاة بهايبر وان', fare: '22', status: 'approved', crowdStatus: 'normal' },
-      { destination: 'القرية الذكية', destinationDetails: 'القرية الذكية / داندي مول', boardingHint: 'الاتجاه العكسي نحو الصحراوي', fare: '10', status: 'approved', crowdStatus: 'normal' },
-      { destination: 'مدينة 6 أكتوبر', destinationDetails: 'الحصري / مول العرب / جهينة', boardingHint: 'من تحت كوبري المشاة اتجاه أكتوبر', fare: '12', status: 'approved', crowdStatus: 'normal' },
-      { destination: 'الشيخ زايد', destinationDetails: 'سرفيس داخلي زايد (الحي 1 إلى 16)', boardingHint: 'بجوار سور هايبر وان', fare: '10', status: 'approved', crowdStatus: 'normal' }
-    ]
-  },
-  {
-    name: 'تقاطع محور 26 يوليو (الصحراوي)',
-    nodeType: 'hub',
-    location: 'الشيخ زايد',
-    governorate: 'الجيزة',
-    lat: 30.0568,
-    lng: 31.0215,
-    mapUrl: 'https://www.google.com/maps?q=30.0568,31.0215',
-    transferHint: 'انزل من طريق اسكندرية الصحراوي تحت كوبري محور 26 يوليو، واطلع السلم لفوق المحور لتركب اتجاه أكتوبر/زايد أو اتجاه المهندسين.',
-    routes: [
-      { destination: 'مدينة 6 أكتوبر', destinationDetails: 'الحصري / مول العرب', boardingHint: 'من فوق كوبري محور 26 يوليو اتجاه أكتوبر', fare: '15', status: 'approved', crowdStatus: 'normal' },
-      { destination: 'الشيخ زايد', destinationDetails: 'هايبر وان / الشيخ زايد', boardingHint: 'من فوق المحور اتجاه زايد', fare: '10', status: 'approved', crowdStatus: 'normal' },
-      { destination: 'المهندسين', destinationDetails: 'ميدان لبنان / وسط البلد', boardingHint: 'من فوق المحور اتجاه القاهرة', fare: '18', status: 'approved', crowdStatus: 'normal' },
-      { destination: 'القرية الذكية', destinationDetails: 'القرية الذكية / أبو رواش', boardingHint: 'من تحت الكوبري على طريق الصحراوي', fare: '10', status: 'approved', crowdStatus: 'normal' }
-    ]
-  },
-  {
-    name: 'تقاطع وصلة دهشور (ميدان جهينة / مول العرب)',
-    nodeType: 'hub',
-    location: 'مدينة 6 أكتوبر',
-    governorate: 'الجيزة',
-    lat: 30.0062,
-    lng: 30.9745,
-    mapUrl: 'https://www.google.com/maps?q=30.0062,30.9745',
-    transferHint: 'نقطة تبادلية تربط بين محور 26 يوليو وطريق الواحات والشيخ زايد أمام مول العرب.',
-    routes: [
-      { destination: 'مدينة 6 أكتوبر', destinationDetails: 'الحصري / جامعة 6 أكتوبر', boardingHint: 'أمام بوابة مول العرب اتجاه الحصري', fare: '10', status: 'approved', crowdStatus: 'normal' },
-      { destination: 'الشيخ زايد', destinationDetails: 'هايبر وان / أركان', boardingHint: 'اتجاه محور 26 يوليو والشيخ زايد', fare: '10', status: 'approved', crowdStatus: 'normal' },
-      { destination: 'الهرم', destinationDetails: 'طريق الواحات / الفردوس / الرماية', boardingHint: 'من وصلة دهشور اتجاه الواحات', fare: '18', status: 'approved', crowdStatus: 'normal' }
-    ]
-  },
-  {
-    name: 'ميدان الرماية / مشعل',
-    nodeType: 'hub',
-    location: 'حدائق الأهرام',
-    governorate: 'الجيزة',
-    lat: 29.9875,
-    lng: 31.1242,
-    mapUrl: 'https://www.google.com/maps?q=29.9875,31.1242',
-    transferHint: 'نقطة تبديل رئيسية للقادم من فيصل والهرم والجيزة والمتجه إلى حدائق الأهرام أو حدائق أكتوبر أو الحصري.',
-    routes: [
-      { destination: 'حدائق الأهرام', destinationDetails: 'بوابة خوفو / أحمس / حورس', boardingHint: 'من صينية الرماية اتجاه طريق الفيوم والواحات', fare: '10', status: 'approved', crowdStatus: 'normal' },
-      { destination: 'حدائق أكتوبر', destinationDetails: 'الفردوس / دريم / ابني بيتك / زويل', boardingHint: 'من الرماية اتجاه طريق الواحات والفيوم', fare: '15', status: 'approved', crowdStatus: 'normal' },
-      { destination: 'مدينة 6 أكتوبر', destinationDetails: 'الحصري / مول مصر', boardingHint: 'ميكروباصات الواحات - الحصري من الرماية', fare: '18', status: 'approved', crowdStatus: 'normal' },
-      { destination: 'فيصل', destinationDetails: 'شارع فيصل / الهرم / الجيزة', boardingHint: 'من مشعل والرماية اتجاه الجيزة', fare: '12', status: 'approved', crowdStatus: 'normal' }
-    ]
-  },
-  {
-    name: 'سلم المريوطية (تقاطع الدائري)',
-    nodeType: 'hub',
-    location: 'الهرم',
-    governorate: 'الجيزة',
-    lat: 29.9841,
-    lng: 31.1495,
-    mapUrl: 'https://www.google.com/maps?q=29.9841,31.1495',
-    transferHint: 'انزل عند موقف المريوطية واطلع سلم الدائري لتركب للمعادي أو القاهرة الجديدة أو المنيب أو أكتوبر.',
-    routes: [
-      { destination: 'المعادي', destinationDetails: 'الأوتوستراد / المعادي / صقر قريش', boardingHint: 'من فوق الدائري اتجاه المنيب والمعادي', fare: '18', status: 'approved', crowdStatus: 'normal' },
-      { destination: 'القاهرة الجديدة', destinationDetails: 'التجمع / كايرو فيستيفال / موقف العاشر', boardingHint: 'من فوق الدائري اتجاه المعادي والتجمع', fare: '25', status: 'approved', crowdStatus: 'normal' },
-      { destination: 'مدينة 6 أكتوبر', destinationDetails: 'الحصري / الرماية / الواحات', boardingHint: 'اتجاه القوس الغربي والرماية', fare: '18', status: 'approved', crowdStatus: 'normal' }
-    ]
-  },
-  {
-    name: 'ميدان لبنان (مدخل محور 26 يوليو)',
-    nodeType: 'hub',
-    location: 'المهندسين',
-    governorate: 'الجيزة',
-    lat: 30.0628,
-    lng: 31.1925,
-    mapUrl: 'https://www.google.com/maps?q=30.0628,31.1925',
-    transferHint: 'أهم نقطة تبادلية في المهندسين لركوب عربيات الشيخ زايد وهايبر وان والحصري عبر المحور.',
-    routes: [
-      { destination: 'الشيخ زايد', destinationDetails: 'هايبر وان / الشيخ زايد', boardingHint: 'مطلع محور 26 يوليو من ميدان لبنان', fare: '18', status: 'approved', crowdStatus: 'normal' },
-      { destination: 'مدينة 6 أكتوبر', destinationDetails: 'الحصري / مول العرب', boardingHint: 'موقف أكتوبر بميدان لبنان', fare: '22', status: 'approved', crowdStatus: 'normal' },
-      { destination: 'القرية الذكية', destinationDetails: 'القرية الذكية / داندي مول', boardingHint: 'مطلع المحور اتجاه الصحراوي', fare: '18', status: 'approved', crowdStatus: 'normal' }
-    ]
-  },
-  {
-    name: 'موقف المستثمرين / الشباب',
-    nodeType: 'station',
-    location: 'الشيخ زايد',
-    governorate: 'الجيزة',
-    lat: 30.0362,
-    lng: 30.9615,
-    mapUrl: 'https://www.google.com/maps?q=30.0362,30.9615',
-    transferHint: 'موقف داخلي وخارجي يخدم أحياء الشيخ زايد (الحي 11 و12 و13 والمستقبل).',
-    routes: [
-      { destination: 'الشيخ زايد', destinationDetails: 'هايبر وان / المحور', boardingHint: 'من داخل موقف المستثمرين', fare: '10', status: 'approved', crowdStatus: 'normal' },
-      { destination: 'مدينة 6 أكتوبر', destinationDetails: 'الحصري / مول العرب', boardingHint: 'خط زايد - الحصري', fare: '12', status: 'approved', crowdStatus: 'normal' },
-      { destination: 'المهندسين', destinationDetails: 'ميدان لبنان / رمسيس', boardingHint: 'خطوط المحور من المستثمرين', fare: '22', status: 'approved', crowdStatus: 'normal' }
-    ]
-  },
-  {
-    name: 'موقف حدائق أكتوبر (دهشور / ابني بيتك)',
-    nodeType: 'station',
-    location: 'حدائق أكتوبر',
-    governorate: 'الجيزة',
-    lat: 29.9092,
-    lng: 31.0086,
-    mapUrl: 'https://www.google.com/maps?q=29.9092,31.0086',
-    transferHint: 'يخدم مناطق ابني بيتك، دجلة جاردنز، سكن مصر، ومدينة زويل.',
-    routes: [
-      { destination: 'مدينة 6 أكتوبر', destinationDetails: 'موقف الحصري / جامعة أكتوبر', boardingHint: 'خط حدائق أكتوبر - الحصري', fare: '12', status: 'approved', crowdStatus: 'normal' },
-      { destination: 'الهرم', destinationDetails: 'ميدان الرماية / مشعل / الجيزة', boardingHint: 'طريق الفيوم والواحات اتجاه الرماية', fare: '15', status: 'approved', crowdStatus: 'normal' }
-    ]
-  },
-  {
-    name: 'بوابة خوفو (البوابة الأولى - حدائق الأهرام)',
-    nodeType: 'stop',
-    location: 'حدائق الأهرام',
-    governorate: 'الجيزة',
-    lat: 29.9788,
-    lng: 31.1125,
-    mapUrl: 'https://www.google.com/maps?q=29.9788,31.1125',
-    transferHint: 'توجد سيارات وميكروباصات تمر من أمام البوابة على طريق الفيوم اتجاه الرماية والجيزة أو اتجاه أكتوبر.',
-    routes: [
-      { destination: 'الدقي', destinationDetails: 'ميدان الجيزة / فيصل / الهرم', boardingHint: 'من أمام البوابة اتجاه ميدان الرماية', fare: '15', status: 'approved', crowdStatus: 'normal' },
-      { destination: 'مدينة 6 أكتوبر', destinationDetails: 'الحصري / حدائق أكتوبر', boardingHint: 'الاتجاه المقابل نحو أكتوبر والفيوم', fare: '15', status: 'approved', crowdStatus: 'normal' }
-    ]
-  },
-  {
-    name: 'القرية الذكية (البوابة الرئيسية)',
-    nodeType: 'stop',
-    location: 'القرية الذكية',
-    governorate: 'الجيزة',
-    lat: 30.0712,
-    lng: 31.0169,
-    mapUrl: 'https://www.google.com/maps?q=30.0712,31.0169',
-    transferHint: 'أمام بوابات القرية الذكية على طريق اسكندرية الصحراوي وامتداد محور 26 يوليو.',
-    routes: [
-      { destination: 'الشيخ زايد', destinationDetails: 'هايبر وان / تقاطع المحور', boardingHint: 'من أمام البوابة اتجاه هايبر وان', fare: '10', status: 'approved', crowdStatus: 'normal' },
-      { destination: 'المهندسين', destinationDetails: 'ميدان لبنان / رمسيس', boardingHint: 'عبر محور 26 يوليو مباشرة', fare: '20', status: 'approved', crowdStatus: 'normal' },
-      { destination: 'مدينة 6 أكتوبر', destinationDetails: 'الحصري / مول العرب', boardingHint: 'عن طريق هايبر وان أو وصلة دهشور', fare: '15', status: 'approved', crowdStatus: 'normal' }
-    ]
-  }
+// =====================================================================
+//  داتا المواقف ونقاط التبديل (أكتوبر + زايد + الجيزة + القاهرة الكبرى)
+//  كل نقطة: [مفتاح, الاسم, النوع, المنطقة, lat, lng, تلميح]
+//  الإحداثيات تقريبية — راجعها وعدّلها من تبويب الخريطة عند الحاجة
+// =====================================================================
+const SEED_NODES = [
+  // ---------------- 6 أكتوبر ----------------
+  ['hosary', 'موقف الحصري الرئيسي', 'station', 'مدينة 6 أكتوبر', 29.9723, 30.9428, 'الموقف الرئيسي بجوار مسجد الحصري، منه خطوط لأغلب مناطق القاهرة والجيزة.'],
+  ['layla', 'موقف ليلة القدر (الحي السادس)', 'station', 'مدينة 6 أكتوبر', 29.9525, 30.9138, 'موقف الحي السادس، مناسب للقادم من الأحياء الغربية.'],
+  ['moa', 'مول العرب (تقاطع الواحات والمحور)', 'hub', 'مدينة 6 أكتوبر', 30.0062, 30.9745, 'نقطة تبادلية بين محور 26 يوليو وطريق الواحات والشيخ زايد.'],
+  ['moe', 'مول مصر (طريق الواحات)', 'hub', 'مدينة 6 أكتوبر', 29.9712, 30.9724, 'تبادل على طريق الواحات اتجاه الرماية وحدائق أكتوبر.'],
+  ['juhayna', 'ميدان جهينة', 'hub', 'مدينة 6 أكتوبر', 29.9985, 30.9615, 'نقطة تجمع بين أكتوبر والشيخ زايد.'],
+  ['distinguished', 'الحي المتميز', 'stop', 'مدينة 6 أكتوبر', 29.9785, 30.9325, 'سرفيس داخلي من وإلى الحصري.'],
+  ['univ', 'جامعة 6 أكتوبر والـ MSA', 'stop', 'مدينة 6 أكتوبر', 29.9697, 30.9215, 'محطة الجامعات، حركة كثيفة صباحاً.'],
+  ['zewail', 'مدينة زويل', 'stop', 'مدينة 6 أكتوبر', 29.9981, 30.9098, 'سرفيس من الحصري وليلة القدر.'],
+  ['dreamland', 'موقف دريم لاند / الواحات', 'station', 'مدينة 6 أكتوبر', 29.978, 30.847, 'موقف على طريق الواحات للقادم من دريم وبيفرلي.'],
+  ['hadayek_oct', 'موقف حدائق أكتوبر (دهشور / ابني بيتك)', 'station', 'حدائق أكتوبر', 29.9092, 31.0086, 'موقف حدائق أكتوبر على طريق الفيوم.'],
+
+  // ---------------- الشيخ زايد ----------------
+  ['hyper', 'موقف هايبر وان (الشيخ زايد)', 'station', 'الشيخ زايد', 30.0385, 31.0022, 'أكبر نقطة تجمع في الشيخ زايد أمام هايبر وان.'],
+  ['investors', 'موقف المستثمرين / الشباب', 'station', 'الشيخ زايد', 30.0362, 30.9615, 'موقف داخلي وخارجي يخدم أحياء الشيخ زايد.'],
+  ['axis_alex', 'تقاطع محور 26 يوليو (الصحراوي)', 'hub', 'الشيخ زايد', 30.0568, 31.0215, 'انزل تحت الكوبري واطلع السلم لتركب اتجاه أكتوبر/زايد أو المهندسين.'],
+  ['smartvillage', 'القرية الذكية (البوابة الرئيسية)', 'stop', 'القرية الذكية', 30.0712, 31.0169, 'أمام بوابات القرية الذكية على الصحراوي.'],
+  ['arkan', 'أركان بلازا', 'stop', 'الشيخ زايد', 30.0213, 30.9712, 'سرفيس داخلي من هايبر وان.'],
+  ['westown', 'ويست تاون / بيفرلي هيلز', 'stop', 'الشيخ زايد', 30.01, 30.979, 'نقطة نزول للكمبوندات القريبة.'],
+  ['americana', 'أمريكانا بلازا', 'stop', 'الشيخ زايد', 30.0405, 31.008, 'قريبة من مدخل زايد على الصحراوي.'],
+  ['zayed14', 'الحي 14 / 16 بالشيخ زايد', 'stop', 'الشيخ زايد', 30.008, 30.956, 'سرفيس داخلي من المستثمرين.'],
+  ['abu_rawash', 'أبو رواش (الصحراوي)', 'stop', 'أبو رواش', 30.064, 31.137, 'نقطة على طريق إسكندرية الصحراوي للقادم من المهندسين.'],
+
+  // ---------------- الجيزة ----------------
+  ['remaya', 'ميدان الرماية / مشعل', 'hub', 'الهرم', 29.9875, 31.1242, 'نقطة تبديل رئيسية للقادم من فيصل والهرم إلى الواحات وأكتوبر.'],
+  ['mariouteya', 'سلم المريوطية (تقاطع الدائري)', 'hub', 'الهرم', 29.9841, 31.1495, 'اطلع سلم الدائري لتركب للمعادي أو القاهرة الجديدة أو المنيب.'],
+  ['khufu', 'بوابة خوفو (حدائق الأهرام)', 'stop', 'الهرم', 29.9788, 31.1125, 'أمام البوابة، ميكروباصات للرماية والجيزة.'],
+  ['pyramids', 'منطقة الأهرام (هرم خوفو)', 'stop', 'الهرم', 29.9792, 31.1342, 'نهاية شارع الهرم عند الأهرامات.'],
+  ['faisal', 'موقف فيصل', 'station', 'فيصل', 29.999, 31.165, 'موقف فيصل، خطوط للجيزة والرماية والهرم.'],
+  ['giza_sq', 'ميدان الجيزة', 'hub', 'الجيزة', 30.0131, 31.2089, 'تبادل رئيسي بين الهرم وفيصل والدقي والتحرير.'],
+  ['mounib', 'موقف المنيب', 'station', 'الجيزة', 29.9806, 31.2067, 'خطوط للصعيد والهرم والتحرير.'],
+  ['dokki', 'ميدان الدقي', 'hub', 'الدقي', 30.0383, 31.2124, 'تبادل بين الجيزة والمهندسين والتحرير.'],
+  ['lebanon', 'ميدان لبنان (مدخل محور 26 يوليو)', 'hub', 'المهندسين', 30.0575, 31.2026, 'نقطة ركوب عربيات الشيخ زايد وأكتوبر عبر المحور.'],
+  ['cairo_univ', 'جامعة القاهرة', 'stop', 'الجيزة', 30.0262, 31.2099, 'أمام بوابة الجامعة، خطوط للجيزة والتحرير.'],
+
+  // ---------------- القاهرة ----------------
+  ['tahrir', 'ميدان التحرير', 'hub', 'وسط البلد', 30.0444, 31.2357, 'قلب القاهرة، تبادل مترو وأتوبيسات وميكروباصات.'],
+  ['ramses', 'ميدان رمسيس', 'hub', 'وسط البلد', 30.0626, 31.2467, 'محطة مصر وموقف رمسيس، خطوط لكل الاتجاهات.'],
+  ['ataba', 'ميدان العتبة', 'hub', 'وسط البلد', 30.0535, 31.2477, 'تبادل مترو وخطوط داخلية.'],
+  ['abbasia', 'ميدان العباسية', 'hub', 'العباسية', 30.0733, 31.2845, 'تبادل للقادم من مدينة نصر ومصر الجديدة.'],
+  ['nasr', 'مدينة نصر (رابعة العدوية)', 'hub', 'مدينة نصر', 30.064, 31.329, 'خطوط للتجمع والعاصمة الإدارية والمطار.'],
+  ['heliopolis', 'مصر الجديدة (روكسي)', 'hub', 'مصر الجديدة', 30.0925, 31.3225, 'تبادل للقادم من العباسية والمطار.'],
+  ['shubra', 'شبرا الخيمة', 'station', 'القليوبية', 30.1286, 31.2422, 'موقف شبرا الخيمة، خطوط لرمسيس والعباسية.'],
+  ['maadi', 'ميدان المعادي', 'hub', 'المعادي', 29.9602, 31.2569, 'تبادل للقادم من حلوان والتحرير والدائري.'],
+  ['helwan', 'موقف حلوان', 'station', 'حلوان', 29.8419, 31.3342, 'الموقف الرئيسي في حلوان.'],
+  ['nc90', 'التجمع الخامس (التسعين)', 'hub', 'القاهرة الجديدة', 30.029, 31.477, 'تبادل للقاهرة الجديدة والعاصمة والمطار.'],
+  ['auc', 'الجامعة الأمريكية بالتجمع', 'stop', 'القاهرة الجديدة', 30.0198, 31.4991, 'سرفيس من التسعين.'],
+  ['capital', 'العاصمة الإدارية', 'station', 'العاصمة الإدارية', 30.02, 31.76, 'موقف العاصمة، خطوط للتجمع ومدينة نصر.'],
+  ['airport', 'مطار القاهرة', 'station', 'مصر الجديدة', 30.1219, 31.4056, 'موقف المطار، خطوط لمصر الجديدة ومدينة نصر ورمسيس.']
+];
+
+// الروابط: [من, إلى, أجرة, دقائق]  (ثنائية الاتجاه)
+const SEED_LINK_ROWS = [
+  // أكتوبر الداخلية
+  ['hosary','layla',10,10], ['hosary','moa',10,12], ['hosary','moe',8,8], ['hosary','juhayna',10,12],
+  ['hosary','distinguished',8,8], ['hosary','univ',8,8], ['hosary','zewail',10,12], ['hosary','dreamland',15,20],
+  ['hosary','hadayek_oct',12,15], ['layla','univ',8,8], ['layla','zewail',8,10], ['layla','distinguished',8,8],
+  ['moe','dreamland',10,12], ['moe','hadayek_oct',10,12], ['moe','remaya',15,20],
+  ['moa','juhayna',5,6], ['moa','hyper',10,10], ['moa','investors',10,8],
+  // أكتوبر ← خارج
+  ['hosary','hyper',12,18], ['hosary','remaya',18,25], ['hosary','lebanon',22,30], ['hosary','giza_sq',22,35],
+  ['hosary','dokki',22,35], ['hosary','mounib',20,30], ['hosary','faisal',20,30], ['hosary','ramses',25,45],
+  ['moa','remaya',18,22], ['moa','lebanon',20,28],
+  ['juhayna','investors',10,8], ['juhayna','hyper',10,10], ['juhayna','remaya',18,22],
+  ['hadayek_oct','remaya',15,20],
+  // زايد
+  ['hyper','investors',10,10], ['hyper','axis_alex',10,6], ['hyper','lebanon',18,20], ['hyper','arkan',8,8],
+  ['hyper','westown',8,8], ['hyper','americana',8,8], ['hyper','zayed14',8,10], ['hyper','smartvillage',10,10],
+  ['investors','zayed14',8,8], ['arkan','westown',6,6], ['axis_alex','smartvillage',10,7],
+  ['axis_alex','lebanon',18,18], ['axis_alex','abu_rawash',10,10], ['abu_rawash','lebanon',15,20],
+  ['smartvillage','lebanon',20,22], ['americana','axis_alex',8,6],
+  // الجيزة
+  ['remaya','mariouteya',10,10], ['remaya','khufu',10,5], ['remaya','faisal',8,10], ['remaya','pyramids',8,8],
+  ['khufu','pyramids',6,6], ['khufu','faisal',8,8], ['mariouteya','mounib',10,15], ['mariouteya','giza_sq',12,20],
+  ['mariouteya','maadi',15,25], ['mariouteya','helwan',20,35], ['mariouteya','nc90',25,45],
+  ['faisal','giza_sq',8,15], ['faisal','mounib',8,15], ['pyramids','giza_sq',8,15],
+  ['giza_sq','mounib',6,10], ['giza_sq','dokki',6,10], ['giza_sq','tahrir',10,20], ['giza_sq','cairo_univ',6,8],
+  ['giza_sq','ramses',12,25], ['giza_sq','maadi',12,25], ['mounib','maadi',10,20],
+  ['dokki','lebanon',6,10], ['dokki','tahrir',8,12], ['dokki','cairo_univ',5,8],
+  ['lebanon','ramses',12,20], ['lebanon','tahrir',10,18], ['lebanon','abbasia',15,30], ['lebanon','shubra',15,30],
+  // القاهرة
+  ['tahrir','ramses',6,12], ['tahrir','ataba',5,10], ['tahrir','maadi',10,20], ['tahrir','abbasia',8,15],
+  ['ramses','ataba',5,8], ['ramses','abbasia',6,10], ['ramses','shubra',8,20], ['ramses','heliopolis',8,15],
+  ['ramses','nasr',10,20], ['ramses','airport',20,35],
+  ['abbasia','nasr',6,10], ['abbasia','heliopolis',6,10], ['nasr','heliopolis',6,10],
+  ['nasr','nc90',15,25], ['nasr','capital',25,45], ['nasr','airport',12,20], ['heliopolis','airport',10,15],
+  ['nc90','auc',6,8], ['nc90','capital',20,35], ['nc90','airport',20,30],
+  ['maadi','helwan',12,20], ['maadi','nc90',18,30]
+];
+
+const _nodeByKey = Object.fromEntries(SEED_NODES.map(n => [n[0], n]));
+
+// الروابط بالأسماء (بتتحوّل لـ IDs وقت التنفيذ)
+export const SEED_LINKS = SEED_LINK_ROWS.map(([a, b, fare, minutes]) => ({
+  from: _nodeByKey[a][1],
+  to: _nodeByKey[b][1],
+  kind: 'ride',
+  fare,
+  minutes,
+  note: `${_nodeByKey[a][1]} ⇄ ${_nodeByKey[b][1]}`
+}));
+
+// المواقف بشكلها النهائي + الخطوط (routes) متولدة تلقائياً من الروابط
+export const OCTOBER_ZAYED_SEED_DATA = SEED_NODES.map(([key, name, nodeType, location, lat, lng, transferHint]) => {
+  const routes = SEED_LINK_ROWS
+    .filter(([a, b]) => a === key || b === key)
+    .map(([a, b, fare]) => {
+      const other = _nodeByKey[a === key ? b : a];
+      return {
+        destination: other[3],
+        destinationDetails: other[1],
+        boardingHint: '',
+        fare: String(fare),
+        status: 'approved',
+        crowdStatus: 'normal'
+      };
+    });
+  return {
+    name, nodeType, location, governorate: 'القاهرة الكبرى', lat, lng,
+    mapUrl: `https://www.google.com/maps?q=${lat},${lng}`,
+    transferHint, routes
+  };
+});
+
+// أسماء الداتا القديمة (بتتمسح قبل الاستيراد عشان ما يحصلش تكرار)
+const LEGACY_SEED_NAMES = [
+  'موقف الحصري الرئيسي', 'موقف ليلة القدر (الحي السادس)', 'موقف هايبر وان (مدخل زايد)',
+  'تقاطع محور 26 يوليو (الصحراوي)', 'تقاطع وصلة دهشور (ميدان جهينة / مول العرب)', 'ميدان الرماية / مشعل',
+  'سلم المريوطية (تقاطع الدائري)', 'ميدان لبنان (مدخل محور 26 يوليو)', 'موقف المستثمرين / الشباب',
+  'موقف حدائق أكتوبر (دهشور / ابني بيتك)', 'بوابة خوفو (البوابة الأولى - حدائق الأهرام)', 'القرية الذكية (البوابة الرئيسية)'
 ];
 
 const BAN_DURATIONS = [
@@ -279,70 +227,65 @@ const AdminPanel = ({ isDarkMode, onClose, triggerToast, appSettings, user, open
     };
   }, []);
 
-  // استرداد مواقف ونقاط أكتوبر والشيخ زايد والهرم والمحور + ربطها ببعضها تلقائياً على الخريطة
+  // استرداد داتا أكتوبر وزايد والجيزة والقاهرة الكبرى + ربطها ببعضها على الخريطة
+  // (بيمسح الداتا القديمة الجاية من الـ seed وروابطها الأول، وبعدين يضيف الجديدة)
   const handleSeedOctoberZayedData = async () => {
-    if (!window.confirm('هل تريد استرداد داتا مواقف ونقاط تبديل (أكتوبر والشيخ زايد والهرم والمحور) وربطها ببعضها على الخريطة تلقائياً؟')) return;
+    if (!window.confirm('هيتم مسح داتا الـ seed القديمة وروابطها، وإضافة المواقف والروابط الجديدة على الخريطة. متأكد؟')) return;
     setIsSeedingData(true);
     try {
-      const batch = writeBatch(db);
-      let addedStationsCount = 0;
-      const stationMapByName = {};
+      const ops = []; // كل عملية: (batch) => void  — بنقسمها على دفعات (حد فايربيز 500)
+      const legacy = new Set(LEGACY_SEED_NAMES.map(n => n.trim()));
 
-      // 1. تسجيل المواقف الموجودة حالياً في الخريطة
+      // 1. تحديد المواقف القديمة اللي هتتمسح
+      const toDeleteIds = new Set();
+      const stationMapByName = {};
       stationsList.forEach(st => {
-        if (st.name) stationMapByName[st.name.trim()] = st;
+        const isOld = st.addedBy === 'admin_seed' || (st.name && legacy.has(st.name.trim()));
+        if (isOld) toDeleteIds.add(st.id);
+        else if (st.name) stationMapByName[st.name.trim()] = st;
       });
 
-      // 2. إضافة المواقف الناقصة من داتا أكتوبر وزايد
+      // 2. مسح المواقف القديمة وأي رابط متعلق بيها
+      toDeleteIds.forEach(id => ops.push(b => b.delete(doc(db, STATIONS_COLLECTION, id))));
+      if (toDeleteIds.size > 0) {
+        const linksSnap = await getDocs(collection(db, LINKS_COLLECTION));
+        linksSnap.docs.forEach(d => {
+          const l = d.data();
+          if (toDeleteIds.has(l.fromId) || toDeleteIds.has(l.toId)) {
+            ops.push(b => b.delete(doc(db, LINKS_COLLECTION, d.id)));
+          }
+        });
+      }
+
+      // 3. إضافة المواقف الجديدة (لو فيه موقف بنفس الاسم من إدخال يدوي بنستخدمه ومنكررهوش)
+      let addedStationsCount = 0;
       OCTOBER_ZAYED_SEED_DATA.forEach((seedItem) => {
         const cleanName = seedItem.name.trim();
-        if (!stationMapByName[cleanName]) {
-          const newDocRef = doc(collection(db, STATIONS_COLLECTION));
-          const stationObj = {
-            ...seedItem,
-            status: 'approved',
-            addedBy: user?.uid || 'admin_seed',
-            crowdStatus: 'normal',
-            crowdUpdatedAt: Date.now()
-          };
-          batch.set(newDocRef, stationObj);
-          stationMapByName[cleanName] = { id: newDocRef.id, ...stationObj };
-          addedStationsCount++;
-        }
+        if (stationMapByName[cleanName]) return;
+        const newDocRef = doc(collection(db, STATIONS_COLLECTION));
+        const stationObj = {
+          ...seedItem,
+          status: 'approved',
+          addedBy: user?.uid || 'admin_seed',
+          crowdStatus: 'normal',
+          crowdUpdatedAt: Date.now()
+        };
+        ops.push(b => b.set(newDocRef, stationObj));
+        stationMapByName[cleanName] = { id: newDocRef.id, ...stationObj };
+        addedStationsCount++;
       });
 
-      // 3. مصفوفة الروابط الذكية بين مواقف ونقاط أكتوبر والشيخ زايد والهرم والمحور
-      const OCTOBER_SEED_LINKS = [
-        { from: 'موقف الحصري الرئيسي', to: 'موقف ليلة القدر (الحي السادس)', kind: 'ride', fare: 10, minutes: 10, note: 'سرفيس داخلي بين الحصري والحي السادس' },
-        { from: 'موقف الحصري الرئيسي', to: 'تقاطع وصلة دهشور (ميدان جهينة / مول العرب)', kind: 'ride', fare: 10, minutes: 12, note: 'سرفيس محور الكفراوي / مول العرب' },
-        { from: 'موقف الحصري الرئيسي', to: 'موقف هايبر وان (مدخل زايد)', kind: 'ride', fare: 12, minutes: 18, note: 'سرفيس الحصري - الشيخ زايد - هايبر وان' },
-        { from: 'موقف الحصري الرئيسي', to: 'موقف حدائق أكتوبر (دهشور / ابني بيتك)', kind: 'ride', fare: 12, minutes: 15, note: 'ميكروباص الحصري - حدائق أكتوبر' },
-        { from: 'موقف الحصري الرئيسي', to: 'ميدان الرماية / مشعل', kind: 'ride', fare: 18, minutes: 25, note: 'عبر طريق الواحات إلى الرماية ومشعل' },
-        { from: 'موقف الحصري الرئيسي', to: 'ميدان لبنان (مدخل محور 26 يوليو)', kind: 'ride', fare: 22, minutes: 30, note: 'مباشر عبر محور 26 يوليو' },
-        { from: 'تقاطع وصلة دهشور (ميدان جهينة / مول العرب)', to: 'موقف هايبر وان (مدخل زايد)', kind: 'ride', fare: 10, minutes: 10, note: 'امتداد محور 26 يوليو اتجاه هايبر وان' },
-        { from: 'تقاطع وصلة دهشور (ميدان جهينة / مول العرب)', to: 'موقف المستثمرين / الشباب', kind: 'ride', fare: 10, minutes: 8, note: 'مدخل زايد والمستثمرين من جهينة' },
-        { from: 'تقاطع وصلة دهشور (ميدان جهينة / مول العرب)', to: 'ميدان الرماية / مشعل', kind: 'ride', fare: 18, minutes: 22, note: 'عبر وصلة دهشور وطريق الواحات' },
-        { from: 'موقف المستثمرين / الشباب', to: 'موقف هايبر وان (مدخل زايد)', kind: 'ride', fare: 10, minutes: 10, note: 'سرفيس داخلي الشيخ زايد - هايبر' },
-        { from: 'موقف هايبر وان (مدخل زايد)', to: 'تقاطع محور 26 يوليو (الصحراوي)', kind: 'ride', fare: 10, minutes: 6, note: 'من أمام هايبر وان إلى تقاطع الصحراوي' },
-        { from: 'موقف هايبر وان (مدخل زايد)', to: 'ميدان لبنان (مدخل محور 26 يوليو)', kind: 'ride', fare: 18, minutes: 20, note: 'مباشر عبر محور 26 يوليو إلى ميدان لبنان' },
-        { from: 'تقاطع محور 26 يوليو (الصحراوي)', to: 'القرية الذكية (البوابة الرئيسية)', kind: 'ride', fare: 10, minutes: 7, note: 'طريق إسكندرية الصحراوي أمام القرية الذكية' },
-        { from: 'تقاطع محور 26 يوليو (الصحراوي)', to: 'ميدان لبنان (مدخل محور 26 يوليو)', kind: 'ride', fare: 18, minutes: 18, note: 'من فوق كوبري محور 26 يوليو اتجاه المهندسين' },
-        { from: 'موقف حدائق أكتوبر (دهشور / ابني بيتك)', to: 'ميدان الرماية / مشعل', kind: 'ride', fare: 15, minutes: 20, note: 'طريق الفيوم والواحات اتجاه صينية الرماية' },
-        { from: 'بوابة خوفو (البوابة الأولى - حدائق الأهرام)', to: 'ميدان الرماية / مشعل', kind: 'ride', fare: 10, minutes: 5, note: 'دقيقتين من أمام بوابة خوفو لميدان الرماية' },
-        { from: 'ميدان الرماية / مشعل', to: 'سلم المريوطية (تقاطع الدائري)', kind: 'ride', fare: 10, minutes: 10, note: 'شارع الهرم أو فيصل إلى المريوطية والدائري' }
-      ];
-
+      // 4. الروابط بين المواقف
       let linkedCount = 0;
-      OCTOBER_SEED_LINKS.forEach(item => {
-        const stA = stationMapByName[item.from];
-        const stB = stationMapByName[item.to];
+      SEED_LINKS.forEach(item => {
+        const stA = stationMapByName[item.from.trim()];
+        const stB = stationMapByName[item.to.trim()];
         if (!stA?.id || !stB?.id) return;
 
         const id = linkDocId(stA.id, stB.id, false);
         const dist = distanceBetween(stA, stB);
         const linkRef = doc(db, LINKS_COLLECTION, id);
-
-        batch.set(linkRef, {
+        ops.push(b => b.set(linkRef, {
           fromId: stA.id,
           toId: stB.id,
           kind: item.kind,
@@ -356,12 +299,19 @@ const AdminPanel = ({ isDarkMode, onClose, triggerToast, appSettings, user, open
           createdBy: user?.uid || 'admin_seed',
           createdAt: Date.now(),
           updatedAt: Date.now()
-        }, { merge: true });
+        }, { merge: true }));
         linkedCount++;
       });
 
-      await batch.commit();
-      triggerToast(`تم تجهيز ${addedStationsCount} نقطة جديدة وربط ${linkedCount} مسار تبادلي لأكتوبر وزايد بنجاح! 🎉🗺️`);
+      // 5. التنفيذ على دفعات
+      const CHUNK = 400;
+      for (let i = 0; i < ops.length; i += CHUNK) {
+        const batch = writeBatch(db);
+        ops.slice(i, i + CHUNK).forEach(fn => fn(batch));
+        await batch.commit();
+      }
+
+      triggerToast(`تم مسح ${toDeleteIds.size} نقطة قديمة، وإضافة ${addedStationsCount} نقطة وربط ${linkedCount} مسار 🎉🗺️`);
     } catch (e) {
       console.error(e);
       triggerToast('حدث خطأ أثناء استيراد وربط الداتا ❌');
