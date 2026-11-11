@@ -39,7 +39,7 @@ const HomeScreen = ({
   const [shuffleSeed, setShuffleSeed] = useState(() => Math.random());
   const [showBesoModal, setShowBesoModal] = useState(false);
 
-  // حالات الخريطة التفاعلية الحية للمستخدم (Stage 3 User Map)
+  // حالات الخريطة التفاعلية الحية (للأدمن فقط)
   const userMapContainerRef = useRef(null);
   const userMapInstanceRef = useRef(null);
   const userMapLayerRef = useRef(null);
@@ -265,9 +265,9 @@ const HomeScreen = ({
     return true;
   });
 
-  // تحميل مكتبة الخريطة Leaflet تلقائياً عند فتح وضع الخريطة للمستخدم
+  // تحميل مكتبة الخريطة Leaflet تلقائياً عند فتح وضع الخريطة للأدمن
   useEffect(() => {
-    if (viewMode !== 'map') return;
+    if (viewMode !== 'map' || !isAdmin) return;
     if (window.L) {
       setLeafletReady(true);
       return;
@@ -287,11 +287,11 @@ const HomeScreen = ({
       script.onload = () => setLeafletReady(true);
       document.body.appendChild(script);
     }
-  }, [viewMode]);
+  }, [viewMode, isAdmin]);
 
-  // رسم الخريطة التفاعلية للمستخدم (الرحلات النشطة + المواقف + خطوط السير)
+  // رسم الخريطة التفاعلية للأدمن
   useEffect(() => {
-    if (viewMode !== 'map' || !leafletReady || !userMapContainerRef.current || !window.L) return;
+    if (viewMode !== 'map' || !isAdmin || !leafletReady || !userMapContainerRef.current || !window.L) return;
     const L = window.L;
 
     if (!userMapInstanceRef.current) {
@@ -368,7 +368,7 @@ const HomeScreen = ({
         }
       });
     }
-  }, [viewMode, leafletReady, mapFilterLayer, visibleStations, availableTripsList, activeUserAreas.join(',')]);
+  }, [viewMode, isAdmin, leafletReady, mapFilterLayer, visibleStations, availableTripsList, activeUserAreas.join(',')]);
 
   useEffect(() => {
     if (viewMode !== 'map' && userMapInstanceRef.current) {
@@ -601,8 +601,8 @@ const HomeScreen = ({
         </div>
       )}
 
-      {/* 2. شريط الأقسام الأربعة بارتفاع رشيق للموبايل */}
-      <div className="grid grid-cols-4 gap-2 mb-3 pointer-events-auto relative z-10">
+      {/* 2. شريط الأقسام (3 أقسام للمستخدم العادي، وزر الخريطة يظهر للأدمن فقط) */}
+      <div className={`grid ${isAdmin ? 'grid-cols-4' : 'grid-cols-3'} gap-2 mb-3 pointer-events-auto relative z-10`}>
         <button
           onClick={() => { setViewMode('list'); setHomeCategory('travel'); setFilterTo(''); setShowCompletedTrips(false); }}
           className={`relative flex flex-col items-center justify-center py-2.5 px-1 rounded-xl border transition-all duration-200 ${
@@ -643,15 +643,17 @@ const HomeScreen = ({
           <span className="text-xs font-black tracking-tight">مواقف مصر</span>
         </button>
 
-        <button
-          onClick={() => setViewMode(viewMode === 'list' ? 'map' : 'list')}
-          className={`relative flex flex-col items-center justify-center py-2.5 px-1 rounded-xl border transition-all duration-200 ${
-            viewMode === 'map' ? 'bg-emerald-600 text-white border-emerald-600 shadow-md scale-[1.01]' : `${bgCard} text-slate-600 dark:text-slate-300 hover:border-indigo-400`
-          }`}
-        >
-          {viewMode === 'map' ? <List size={20} className="mb-1 shrink-0" /> : <MapPinned size={20} className="mb-1 shrink-0" />}
-          <span className="text-xs font-black tracking-tight">{viewMode === 'map' ? 'القائمة' : 'الخريطة'}</span>
-        </button>
+        {isAdmin && (
+          <button
+            onClick={() => setViewMode(viewMode === 'list' ? 'map' : 'list')}
+            className={`relative flex flex-col items-center justify-center py-2.5 px-1 rounded-xl border transition-all duration-200 ${
+              viewMode === 'map' ? 'bg-emerald-600 text-white border-emerald-600 shadow-md scale-[1.01]' : `${bgCard} text-slate-600 dark:text-slate-300 hover:border-indigo-400`
+            }`}
+          >
+            {viewMode === 'map' ? <List size={20} className="mb-1 shrink-0" /> : <MapPinned size={20} className="mb-1 shrink-0" />}
+            <span className="text-xs font-black tracking-tight">{viewMode === 'map' ? 'القائمة' : 'خريطة الأدمن'}</span>
+          </button>
+        )}
       </div>
 
       {viewMode === 'list' && (
@@ -988,14 +990,14 @@ const HomeScreen = ({
         </div>
       )}
 
-      {/* ================= شاشة الخريطة التفاعلية الحية للمستخدم (Stage 3) ================= */}
-      {viewMode === 'map' && (
+      {/* ================= شاشة الخريطة التفاعلية الحية (للأدمن فقط) ================= */}
+      {viewMode === 'map' && isAdmin && (
         <div className="space-y-3 animate-fade-in-up">
           <div className={`p-3 rounded-2xl border shadow-sm space-y-2.5 ${bgCard}`}>
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="flex items-center gap-1.5">
                 <MapPinned size={18} className="text-emerald-500" />
-                <h3 className={`font-black text-xs sm:text-sm ${textPrimary}`}>خريطة "طريقنا" التفاعلية الحية</h3>
+                <h3 className={`font-black text-xs sm:text-sm ${textPrimary}`}>خريطة "طريقنا" التفاعلية الحية (أدمن)</h3>
               </div>
 
               <div className="flex items-center gap-1">
