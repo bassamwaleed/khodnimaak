@@ -9,7 +9,6 @@ import BesoAssistantModal from '../components/BesoAssistantModal';
 import { collection, addDoc } from 'firebase/firestore';
 import { db, STATIONS_COLLECTION } from '../firebase';
 import JourneyPlanner from '../components/JourneyPlanner';
-import useBackClose from '../hooks/useBackClose';
 import { SUPPORTED_AREAS, NEARBY_AREAS_MAP, normalizeArabic } from '../App';
 import { EGYPT_CITIES, getPlaceCoords, getDistanceKm, isPointNearRoute, escapeHtml } from '../utils/helpers';
 
@@ -18,7 +17,7 @@ const HomeScreen = ({
   homeCategory, setHomeCategory, viewMode, setViewMode, filterType, setFilterType,
   filterFrom, setFilterFrom, filterTo, setFilterTo, openChatFromTrip,
   setSelectedStation, triggerToast, appSettings, userArea, userAreas = [], onOpenAreaModal,
-  onOpenPublicProfile, hasActiveTracker = false, transit = null
+  onOpenPublicProfile, hasActiveTracker = false
 }) => {
   
   const [stationSearchQuery, setStationSearchQuery] = useState('');
@@ -474,12 +473,6 @@ const HomeScreen = ({
   const filteredPickerAreas = allPickerLocations.filter(a => 
     !locationPickerSearch.trim() || normalizeArabic(a).includes(normalizeArabic(locationPickerSearch))
   );
-
-  // زرار/سحبة الرجوع تقفل النافذة المفتوحة بدل ما تخرج من الموقع
-  useBackClose(Boolean(locationPickerType), () => { setLocationPickerType(null); setLocationPickerSearch(''); });
-  useBackClose(showBesoModal, () => setShowBesoModal(false));
-  useBackClose(showAddStation, () => setShowAddStation(false));
-  useBackClose(viewMode === 'map' && isAdmin, () => setViewMode('list'));
 
   const activeFiltersCount = (quickFilter !== 'all' ? 1 : 0) + (showCompletedTrips ? 1 : 0);
 
@@ -1157,7 +1150,6 @@ const HomeScreen = ({
           userAreas={activeUserAreas}
           user={user}
           isAdmin={isAdmin}
-          transit={transit}
         />
       )}
 
