@@ -1,37 +1,16 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { createPortal } from 'react-dom';
-import { collection, addDoc, onSnapshot, serverTimestamp } from 'firebase/firestore';
 import { X, Send, Bot, Sparkles, BusFront, Compass, ChevronLeft, Edit3, PlusCircle } from 'lucide-react';
-import { db, ADMIN_EMAIL, LINKS_COLLECTION } from '../firebase';
+import {
+  collection, addDoc, doc, updateDoc, setDoc, onSnapshot, arrayUnion, increment, serverTimestamp
+} from 'firebase/firestore';
+import { db, ADMIN_EMAIL, STATIONS_COLLECTION, LINKS_COLLECTION } from '../firebase';
 import { getPlaceCoords, getDistanceKm } from '../utils/helpers';
 
-// الردود الحوارية الأساسية فقط (أي داتا مواصلات بتيجي من الخريطة الحية)
-const BESO_CONVERSATIONAL_INTENTS = [
-  {
-    id: 'greeting',
-    keywords: ['اهلا', 'سلام عليكم', 'السلام عليكم', 'صباح الخير', 'مساء الخير', 'ازيك', 'عامل ايه', 'اخبارك', 'مرحبا', 'هاي', 'الو', 'يا بيسو'],
-    replies: [
-      `أهلاً بيك يا بطل في "طريقنا"! 👋🤖\nأنا "بيسو"، قولي مكانك فين ورايح فين وهطلعلك أسرع وأرخص طريق من خريطة المواقف الحية!`,
-      `وعليكم السلام ورحمة الله! يا مرحب بيك في "طريقنا" 🚀.. اكتبلي (من كذا لـ كذا) وهجبلك المواصلة بالتفصيل.`
-    ]
-  },
-  {
-    id: 'app_purpose',
-    keywords: ['هدف التطبيق', 'فكره التطبيق', 'فكرة التطبيق', 'يعني ايه طريقنا', 'ابلكيشن ايه ده', 'بيعمل ايه', 'لازمته ايه', 'فكرته ايه', 'شرح التطبيق', 'عن التطبيق'],
-    replies: [
-      `فكرة "طريقنا" ببساطة 🎯:\n1️⃣ **مشاركة المشاوير:** كباتن وركاب في نفس الطريق بيوفروا مصاريف المشوار.\n2️⃣ **توصيل الأمانات 📦:** شحن سريع مع مسافرين في نفس اليوم.\n3️⃣ **خريطة المواقف والنقاط التبادلية 🚏:** دليل حي للمواقف ونقاط التبديل والتعريفة، وأنا بحسبلك أسرع وأرخص طريق بينها!`
-    ]
-  },
-  {
-    id: 'thanks',
-    keywords: ['شكرا', 'تسلم', 'ربنا يخليك', 'ممتاز', 'شاطر', 'جدع', 'الله ينور', 'عاش', 'حبيبي'],
-    replies: [
-      `حبيبي يا بطل، العفو! 🤍🤖 توصل بالسلامة دايماً.`,
-      `أقل واجب يا صاحبي! أنا متحدث لحظياً بأي خط جديد بينزل على الخريطة 🚀`
-    ]
-  }
-];
 
+// =====================================================================
+//  1) محرك بيسو: بحث ذكي + رسم بياني للشبكة + أقصر/أرخص مسار + بحث موحد (smartSearch)
+// =====================================================================
 // ==ENGINE_START==
 /* ===================================================================
    محرك بيسو: بحث ذكي عن الأماكن + رسم بياني للشبكة + أقصر/أرخص مسار
@@ -166,7 +145,7 @@ function createEngine(stations, links, isAdmin) {
       const queries = [{ q: qT, f: 1 }];
       ALIASES.forEach(([k, v]) => {
         const kT = tokenize(k, false);
-        if (kT.length && kT.every(kt => qT.some(q => tokenMatch(q, kt) >= 0.9))) queries.push({ q: tokenize(v, false), f: 0.85 });
+        if (kT.length && kT.every(kt => qT.some(q => tokenMatch(q, kt) >= 0.9))) queries.push({ q: tokenize(v, false), f: 0.8 });
       });
       const scored = stations.map(st => {
         const T = tok.get(st.id); let s = 0;
@@ -175,7 +154,7 @@ function createEngine(stations, links, isAdmin) {
       }).sort((a, b) => b.score - a.score);
       const best = scored[0]?.score || 0;
       if (best >= 0.6) {
-        out = { text, score: best, candidates: scored.filter(x => x.score >= Math.max(0.6, best * 0.88)).slice(0, 8) };
+        out = { text, score: best, candidates: scored.filter(x => x.score >= Math.max(0.6, best * 0.9)).slice(0, 8) };
       } else {
         out = { text, score: best, candidates: [], suggestions: scored.filter(x => x.score >= 0.3).slice(0, 3).map(x => x.st) };
         // محاولة أخيرة: إحداثيات المكان لو الدالة بتعرفه فعلاً (مش قيمة افتراضية)
@@ -336,6 +315,192 @@ function createEngine(stations, links, isAdmin) {
 }
 // ==ENGINE_END==
 
+// ---------------------------------------------------------------------
+// إرشادات بيسو المعتمدة (من الأدمن أو بعد تأييد مستخدمين كفاية)
+// ---------------------------------------------------------------------
+export const matchGuides = (guides, text) => {
+  const qT = norm(text).split(' ').filter(Boolean).map(stem);
+  return (guides || []).filter(cg => {
+    if (!cg || cg.status !== 'approved') return false;
+    const parts = String(cg.placeKeywords || '').split(/[-،,]/).map(s => s.trim()).filter(Boolean);
+    return parts.length > 0 && parts.every(part => {
+      const pT = tokenize(part);
+      return pT.length > 0 && pT.every(pt => qT.some(q => tokenMatch(q, pt) >= 0.8));
+    });
+  });
+};
+
+// الخطوط المباشرة اللي بتطلع من موقف (للعرض في كروت البحث بدل "مفيش داتا")
+export const stationConnections = (engine, stationId) => (engine.adj.get(stationId) || [])
+  .map(e => ({
+    station: engine.byId.get(e.to),
+    fare: e.fare, minutes: e.minutes, note: e.note && !e.note.includes('⇄') ? e.note : '',
+    boarding: engine.boardingFor(e.from, e.to)
+  }))
+  .filter(x => x.station)
+  .sort((a, b) => (a.fare ?? 99) - (b.fare ?? 99));
+
+// ---------------------------------------------------------------------
+// بحث ذكي واحد لكل التطبيق:
+//   kind: 'route'  → فيه (من) و(إلى) والمسار محسوب   { origin, dest, plan, guides }
+//   kind: 'places' → مكان/مواقف مطابقة                 { res, stations, guides }
+//   kind: 'none'   → ملقاش، ومعاه اقتراحات تصحيح       { suggestions, guides }
+// ---------------------------------------------------------------------
+export function smartSearch(engine, guides, text) {
+  const g = matchGuides(guides, text);
+  const parsed = engine.parse(text);
+  if (parsed.origin?.candidates.length && parsed.dest?.candidates.length) {
+    return { kind: 'route', origin: parsed.origin, dest: parsed.dest, plan: engine.plan(parsed.origin, parsed.dest), guides: g };
+  }
+  const res = parsed.place || parsed.dest || parsed.origin;
+  if (res && res.candidates.length) return { kind: 'places', res, stations: res.candidates.map(c => c.st), guides: g };
+  return { kind: 'none', suggestions: res?.suggestions || [], guides: g, query: text };
+}
+
+export { createEngine, norm, tokenize, tokenMatch, stem, wantsPref };
+
+// =====================================================================
+//  2) هوك الداتا الحية من الأدمن بانل (مواقف + روابط + إرشادات) — استخدمه في شاشة البحث كمان
+// =====================================================================
+export const GUIDES_COLLECTION = 'beso_knowledge_updates';
+
+// stations (اختياري): لو مرّرت قايمة مواقف جاهزة بيستخدمها، وإلا بيسمع على الـ Firestore بنفسه
+export function useTransitData({ stations: stationsProp, isAdmin = false } = {}) {
+  const [ownStations, setOwnStations] = useState([]);
+  const [links, setLinks] = useState([]);
+  const [guides, setGuides] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const useOwn = !Array.isArray(stationsProp) || stationsProp.length === 0;
+
+  useEffect(() => {
+    if (!useOwn) return undefined;
+    const unsub = onSnapshot(collection(db, STATIONS_COLLECTION),
+      (snap) => { setOwnStations(snap.docs.map(d => ({ id: d.id, ...d.data() }))); setLoading(false); },
+      () => setLoading(false));
+    return () => unsub();
+  }, [useOwn]);
+
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, LINKS_COLLECTION),
+      (snap) => setLinks(snap.docs.map(d => ({ id: d.id, ...d.data() }))), () => setLinks([]));
+    return () => unsub();
+  }, []);
+
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, GUIDES_COLLECTION),
+      (snap) => setGuides(snap.docs.map(d => ({ id: d.id, ...d.data() }))), () => setGuides([]));
+    return () => unsub();
+  }, []);
+
+  const stations = useMemo(
+    () => (useOwn ? ownStations : stationsProp)
+      .filter(s => s && s.id && s.status !== 'rejected' && (isAdmin || s.status !== 'pending')),
+    [useOwn, ownStations, stationsProp, isAdmin]
+  );
+  const engine = useMemo(() => createEngine(stations, links, !!isAdmin), [stations, links, isAdmin]);
+  const search = useCallback((text) => smartSearch(engine, guides, text), [engine, guides]);
+
+  return { stations, links, guides, engine, search, loading };
+}
+
+// =====================================================================
+//  3) الحكمة الجماعية: اعتماد تلقائي للاقتراحات + تسجيل البحث الفاشل
+// =====================================================================
+export const AUTO_APPROVE_VOTES = 3;            // عدد المستخدمين المختلفين اللازم للاعتماد التلقائي
+const GUIDES = 'beso_knowledge_updates';
+const MISSES = 'beso_search_misses';
+
+const keyOf = (s) => tokenize(s, false).sort().join(' ');
+const similarity = (a, b) => {
+  const A = new Set(tokenize(a, false)), B = new Set(tokenize(b, false));
+  if (!A.size || !B.size) return 0;
+  let inter = 0; A.forEach(t => { if (B.has(t)) inter++; });
+  return inter / (A.size + B.size - inter);
+};
+
+// guides = كل الإرشادات الحالية (من useTransitData)
+export async function submitGuideSuggestion({ guides = [], user, isAdmin, placeKeywords, info }) {
+  const uid = user?.uid || null;
+  const keywords = placeKeywords.trim(), text = info.trim();
+  const key = keyOf(keywords);
+
+  if (isAdmin) {
+    await addDoc(collection(db, GUIDES), {
+      placeKeywords: keywords, correctedInfo: text, placeKey: key, status: 'approved',
+      submittedBy: uid || 'admin', submittedByName: user?.displayName || 'الإدارة',
+      supporters: uid ? [uid] : [], supportCount: 1, createdAt: serverTimestamp()
+    });
+    return { status: 'approved', votes: 1 };
+  }
+
+  // لو في اقتراح مشابه (نفس المكان ومعلومات متقاربة) → ده تأييد له مش اقتراح جديد
+  const existing = guides.find(g => g.status !== 'rejected' && keyOf(g.placeKeywords) === key && similarity(g.correctedInfo, text) >= 0.5);
+  if (existing && uid) {
+    const supporters = new Set([...(existing.supporters || []), existing.submittedBy].filter(Boolean));
+    if (supporters.has(uid)) return { status: existing.status === 'approved' ? 'approved' : 'already', votes: supporters.size };
+    supporters.add(uid);
+    const votes = supporters.size;
+    const auto = existing.status !== 'approved' && votes >= AUTO_APPROVE_VOTES;
+    await updateDoc(doc(db, GUIDES, existing.id), {
+      supporters: arrayUnion(uid), supportCount: votes,
+      ...(auto ? { status: 'approved', autoApproved: true, approvedAt: serverTimestamp() } : {})
+    });
+    return { status: (auto || existing.status === 'approved') ? 'approved' : 'voted', votes, auto };
+  }
+
+  await addDoc(collection(db, GUIDES), {
+    placeKeywords: keywords, correctedInfo: text, placeKey: key, status: 'pending',
+    submittedBy: uid || 'guest', submittedByName: user?.displayName || 'مستخدم طريقنا',
+    supporters: uid ? [uid] : [], supportCount: 1, createdAt: serverTimestamp()
+  });
+  return { status: 'pending', votes: 1 };
+}
+
+// تسجيل بحث فاشل: العدّاد بيزيد مع كل شخص، والأدمن يشوف أكتر الأماكن المطلوبة
+export async function logSearchMiss(text, uid) {
+  try {
+    const q = norm(text);
+    if (!q || q.length < 2) return;
+    const id = q.replace(/\s+/g, '_').slice(0, 80);
+    await setDoc(doc(db, MISSES, id), {
+      query: q, count: increment(1), lastAt: serverTimestamp(),
+      ...(uid ? { users: arrayUnion(uid) } : {})
+    }, { merge: true });
+  } catch (e) { /* بيتجاهل لو الصلاحيات مش مفتوحة */ }
+}
+
+// =====================================================================
+//  4) واجهة شات بيسو
+// =====================================================================
+// الردود الحوارية الأساسية فقط (أي داتا مواصلات بتيجي من الخريطة الحية)
+const BESO_CONVERSATIONAL_INTENTS = [
+  {
+    id: 'greeting',
+    keywords: ['اهلا', 'سلام عليكم', 'السلام عليكم', 'صباح الخير', 'مساء الخير', 'ازيك', 'عامل ايه', 'اخبارك', 'مرحبا', 'هاي', 'الو', 'يا بيسو'],
+    replies: [
+      `أهلاً بيك يا بطل في "طريقنا"! 👋🤖\nأنا "بيسو"، قولي مكانك فين ورايح فين وهطلعلك أسرع وأرخص طريق من خريطة المواقف الحية!`,
+      `وعليكم السلام ورحمة الله! يا مرحب بيك في "طريقنا" 🚀.. اكتبلي (من كذا لـ كذا) وهجبلك المواصلة بالتفصيل.`
+    ]
+  },
+  {
+    id: 'app_purpose',
+    keywords: ['هدف التطبيق', 'فكره التطبيق', 'فكرة التطبيق', 'يعني ايه طريقنا', 'ابلكيشن ايه ده', 'بيعمل ايه', 'لازمته ايه', 'فكرته ايه', 'شرح التطبيق', 'عن التطبيق'],
+    replies: [
+      `فكرة "طريقنا" ببساطة 🎯:\n1️⃣ **مشاركة المشاوير:** كباتن وركاب في نفس الطريق بيوفروا مصاريف المشوار.\n2️⃣ **توصيل الأمانات 📦:** شحن سريع مع مسافرين في نفس اليوم.\n3️⃣ **خريطة المواقف والنقاط التبادلية 🚏:** دليل حي للمواقف ونقاط التبديل والتعريفة، وأنا بحسبلك أسرع وأرخص طريق بينها!`
+    ]
+  },
+  {
+    id: 'thanks',
+    keywords: ['شكرا', 'تسلم', 'ربنا يخليك', 'ممتاز', 'شاطر', 'جدع', 'الله ينور', 'عاش', 'حبيبي'],
+    replies: [
+      `حبيبي يا بطل، العفو! 🤍🤖 توصل بالسلامة دايماً.`,
+      `أقل واجب يا صاحبي! أنا متحدث لحظياً بأي خط جديد بينزل على الخريطة 🚀`
+    ]
+  }
+];
+
+
+
 const KIND_ICON = { ride: '🚐', bus: '🚌', metro: '🚇', walk: '🚶', microbus: '🚐', taxi: '🚕' };
 const fareTxt = (e) => (e.fare == null ? 'أجرة غير مسجلة' : `${e.fare} ج`);
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
@@ -369,8 +534,6 @@ const RichText = ({ text }) => String(text || '').split(/(\*\*[^*]+\*\*)/g).map(
 
 const BesoAssistantModal = ({ stations = [], isDarkMode, onClose, onSelectStation, userAreas = [], user, isAdmin, userLocation = null }) => {
   const [input, setInput] = useState('');
-  const [customGuides, setCustomGuides] = useState([]);
-  const [links, setLinks] = useState([]);
   const [isTyping, setIsTyping] = useState(false);
   const [locStatus, setLocStatus] = useState('idle'); // idle | loading | ok | denied
   const [locError, setLocError] = useState(null);
@@ -384,11 +547,8 @@ const BesoAssistantModal = ({ stations = [], isDarkMode, onClose, onSelectStatio
   // ذاكرة المحادثة (ref عشان نتفادى القيم القديمة داخل الـ async)
   const ctxRef = useRef({ pendingDest: null, pendingOrigin: null, last: null, userCoords: null });
 
-  const approvedStations = useMemo(
-    () => (stations || []).filter(s => s && s.id && (isAdmin || s.status !== 'pending')),
-    [stations, isAdmin]
-  );
-  const engine = useMemo(() => createEngine(approvedStations, links, !!isAdmin), [approvedStations, links, isAdmin]);
+  // كل الداتا حية من لوحة الأدمن (مواقف + روابط + إرشادات) — أي تحديث بيوصل فوراً
+  const { stations: approvedStations, guides: customGuides, engine } = useTransitData({ stations, isAdmin });
 
   const [messages, setMessages] = useState([
     {
@@ -405,13 +565,6 @@ const BesoAssistantModal = ({ stations = [], isDarkMode, onClose, onSelectStatio
     'إيه النقاط التبادلية المتسجلة؟ 🔄',
     'إيه فكرة التطبيق ده؟ 💡'
   ];
-
-  useEffect(() => {
-    const unsub = onSnapshot(collection(db, 'beso_knowledge_updates'), (snap) => {
-      setCustomGuides(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-    }, () => {});
-    return () => unsub();
-  }, []);
 
   // ------------------------------------------------------------------
   // لوكيشن المستخدم: بيتاخد تلقائياً أول ما الشات يفتح (ويتجدد كل دقيقتين)
@@ -451,14 +604,6 @@ const BesoAssistantModal = ({ stations = [], isDarkMode, onClose, onSelectStatio
     })();
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // روابط الشبكة (المسارات بين المواقف) — بتتحدث لحظياً
-  useEffect(() => {
-    const unsub = onSnapshot(collection(db, LINKS_COLLECTION), (snap) => {
-      setLinks(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-    }, () => setLinks([]));
-    return () => unsub();
   }, []);
 
   useEffect(() => {
@@ -555,17 +700,9 @@ const BesoAssistantModal = ({ stations = [], isDarkMode, onClose, onSelectStatio
 
     // إرشادات الأدمن المعتمدة (بتتضاف على الإجابة، أو بترد لوحدها لو مفيش حاجة تانية)
     const guideBlock = (() => {
-      const qT = toks.map(stem);
-      const hits = customGuides.filter(cg => {
-        if (cg.status !== 'approved') return false;
-        const parts = String(cg.placeKeywords || '').split(/[-،,]/).map(s => s.trim()).filter(Boolean);
-        return parts.length > 0 && parts.every(part => {
-          const pT = tokenize(part);
-          return pT.length > 0 && pT.every(pt => qT.some(q => tokenMatch(q, pt) >= 0.8));
-        });
-      });
+      const hits = matchGuides(customGuides, queryText);
       if (!hits.length) return '';
-      return hits.slice(0, 2).map(g => `📌 **إرشاد معتمد من الإدارة (${g.placeKeywords}):**\n${g.correctedInfo}`).join('\n\n');
+      return hits.slice(0, 2).map(g => `📌 **إرشاد معتمد${g.autoApproved ? ' (بتأييد المستخدمين)' : ' من الإدارة'} (${g.placeKeywords}):**\n${g.correctedInfo}`).join('\n\n');
     })();
     const withGuide = (r) => (guideBlock ? { ...r, text: `${r.text}\n\n${guideBlock}` } : r);
 
@@ -648,10 +785,12 @@ const BesoAssistantModal = ({ stations = [], isDarkMode, onClose, onSelectStatio
     const place = parsed.place && parsed.place.candidates.length ? parsed.place : null;
 
     if (origin && !origin.candidates.length) {
-      return reply(didYouMean(origin.text, origin));
+      logSearchMiss(origin.text, user?.uid);
+      return withGuide(reply(didYouMean(origin.text, origin)));
     }
     if (dest && !dest.candidates.length) {
-      return reply(didYouMean(dest.text, dest));
+      logSearchMiss(dest.text, user?.uid);
+      return withGuide(reply(didYouMean(dest.text, dest)));
     }
 
     if (ctx.pendingOrigin && !origin) {
@@ -789,15 +928,11 @@ const BesoAssistantModal = ({ stations = [], isDarkMode, onClose, onSelectStatio
     setIsSubmittingCorrection(true);
     try {
       const userIsAdmin = Boolean(isAdmin || (user?.email && user.email.toLowerCase() === ADMIN_EMAIL));
-      await addDoc(collection(db, 'beso_knowledge_updates'), {
-        placeKeywords: correctionPlace.trim(),
-        correctedInfo: correctionText.trim(),
-        status: userIsAdmin ? 'approved' : 'pending',
-        submittedBy: user?.uid || 'guest',
-        submittedByName: user?.displayName || 'مستخدم طريقنا',
-        createdAt: serverTimestamp()
-      });
-      setCorrectionSuccessMsg(userIsAdmin ? 'تم الحفظ والاعتماد فوراً في ذاكرة بيسو! ✅' : 'شكراً! تم الإرسال للإدارة للمراجعة ⏳');
+      const r = await submitGuideSuggestion({ guides: customGuides, user, isAdmin: userIsAdmin, placeKeywords: correctionPlace, info: correctionText });
+      if (r.status === 'approved') setCorrectionSuccessMsg(r.auto ? `اتفق ${r.votes} مستخدمين فاتعتمد الإرشاد تلقائياً في ذاكرة بيسو! ✅` : 'تم الحفظ والاعتماد في ذاكرة بيسو! ✅');
+      else if (r.status === 'voted') setCorrectionSuccessMsg(`سجلت تأييدك 🗳️ (${r.votes}/${AUTO_APPROVE_VOTES}) — لما يوصل ${AUTO_APPROVE_VOTES} مستخدمين هيتعتمد تلقائياً.`);
+      else if (r.status === 'already') setCorrectionSuccessMsg('انت أيدت الإرشاد ده قبل كده 👍');
+      else setCorrectionSuccessMsg('شكراً! اتسجل اقتراحك، ولو مستخدمين تانيين أيدوه هيتعتمد تلقائياً ⏳');
     } catch (err) {
       setCorrectionSuccessMsg('تعذر الحفظ دلوقتي، جرب تاني ❌');
     } finally {
