@@ -1,7 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signInAnonymously, updateProfile, signOut } from 'firebase/auth';
 import { collection, onSnapshot, doc, getDoc, setDoc, addDoc, updateDoc, serverTimestamp, increment, writeBatch, query, where, getDocs, arrayUnion } from 'firebase/firestore';
-import { Loader2, Car, MessageCircle, User, Home, CheckCircle2, Plus, X, Lock, MapPin, Bell, Search, Edit2, Check, Route, Phone, Eye, ShieldCheck, Clock, ChevronDown, ChevronUp, Sparkles } from 'lucide-react';
+import { Loader2, Car, MessageCircle, User, Home, CheckCircle2, Plus, X, Lock, MapPin, Bell, Search, Check, Route, Phone, Clock, ChevronDown, ChevronUp, Sparkles } from 'lucide-react';
 
 import { auth, db, APP_COLLECTION_NAME, USERS_COLLECTION, STATIONS_COLLECTION, LINKS_COLLECTION, ADMIN_EMAIL } from './firebase';
 import { safeMillis, useEgyptianLocation } from './utils/helpers';
@@ -14,12 +14,13 @@ import VerifyModal from './components/VerifyModal';
 import AdminPanel from './components/AdminPanel';   
 import StationModal from './components/StationModal'; 
 import PublicProfileModal from './components/PublicProfileModal';
+import { useTransitData } from './components/BesoAssistantModal';
 
 import { SUPPORTED_AREAS } from './utils/gisConstants';
 export { SUPPORTED_AREAS };
 
 export const NEARBY_AREAS_MAP = {
-  'حدائق أكتوبر': ['مدينة 6 أكتوبر', 'حدائق الأهرام', 'الشيخ زايد', 'الهرم', 'فيصل'],
+  'حدائق أكتوبر': ['مدينة 6 أكتوبر', 'حدائق الأهرام', 'الشيخ زايد', 'الهرم', 'فيصل', 'الفيوم'],
   'حدائق الأهرام': ['الهرم', 'فيصل', 'حدائق أكتوبر', 'مدينة 6 أكتوبر', 'الشيخ زايد'],
   'مدينة 6 أكتوبر': ['الشيخ زايد', 'حدائق أكتوبر', 'القرية الذكية', 'حدائق الأهرام', 'الهرم'],
   'الشيخ زايد': ['مدينة 6 أكتوبر', 'القرية الذكية', 'حدائق أكتوبر', 'المهندسين', 'الدقي'],
@@ -33,7 +34,13 @@ export const NEARBY_AREAS_MAP = {
   'حلوان': ['المعادي', 'وسط البلد', 'القاهرة الجديدة'],
   'مدينة نصر': ['مصر الجديدة', 'القاهرة الجديدة', 'وسط البلد', 'المعادي'],
   'مصر الجديدة': ['مدينة نصر', 'القاهرة الجديدة', 'وسط البلد'],
-  'القاهرة الجديدة': ['مدينة نصر', 'مصر الجديدة', 'المعادي'],
+  'القاهرة الجديدة': ['مدينة نصر', 'مصر الجديدة', 'المعادي', 'العاصمة الإدارية'],
+  'الجيزة': ['الدقي', 'الهرم', 'فيصل', 'المهندسين', 'وسط البلد'],
+  'أبو رواش': ['الشيخ زايد', 'القرية الذكية', 'المهندسين'],
+  'العباسية': ['وسط البلد', 'مدينة نصر', 'مصر الجديدة'],
+  'القليوبية': ['وسط البلد', 'العباسية', 'مصر الجديدة'],
+  'العاصمة الإدارية': ['القاهرة الجديدة', 'مدينة نصر', 'مصر الجديدة'],
+  'الفيوم': ['حدائق أكتوبر', 'مدينة 6 أكتوبر', 'الهرم', 'فيصل'],
   'مدينة السادات': ['شبين الكوم', 'الشيخ زايد', 'مدينة 6 أكتوبر'],
   'شبين الكوم': ['مدينة السادات', 'القاهرة الجديدة', 'وسط البلد']
 };
@@ -124,6 +131,18 @@ export default function App() {
   const [realTrips, setRealTrips] = useState([]); 
   const [stations, setStations] = useState([]); 
   const [links, setLinks] = useState([]); 
+
+  // محرك البحث الذكي المشترك (نفس داتا الأدمن بانل حيّة + إرشادات بيسو) — بيتمرر للشاشات
+  const transit = useTransitData({ stations, links, isAdmin });
+
+  // كل المناطق = المناطق المدعومة + أي منطقة موجودة في مواقف الأدمن بانل (عشان مفيش موقف يتخفي بسبب اختلاف الاسم)
+  const allAreas = useMemo(() => {
+    const set = new Set(SUPPORTED_AREAS);
+    (stations || []).forEach(s => {
+      if (s && s.status !== 'rejected' && typeof s.location === 'string' && s.location.trim()) set.add(s.location.trim());
+    });
+    return [...set];
+  }, [stations]);
   const [myInbox, setMyInbox] = useState([]);
   const [appSettings, setAppSettings] = useState({ logo: null, banners: [], bannerText: '' });
   
@@ -352,7 +371,7 @@ export default function App() {
     }
   };
 
-  const filteredAreas = SUPPORTED_AREAS.filter(area => {
+  const filteredAreas = allAreas.filter(area => {
     if (!areaSearchQuery.trim()) return true;
     return normalizeArabic(area).includes(normalizeArabic(areaSearchQuery));
   }).sort((a, b) => {
@@ -1187,7 +1206,7 @@ export default function App() {
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                     <select required value={newTrip.from} onChange={e => setNewTrip({...newTrip, from: e.target.value})} className={`w-full p-3 rounded-xl border font-bold text-xs outline-none ${bgInput}`}>
                       <option value="" disabled>المنطقة / المحافظة *</option>
-                      {SUPPORTED_AREAS.map(c => <option key={c} value={c}>{c}</option>)}
+                      {allAreas.map(c => <option key={c} value={c}>{c}</option>)}
                     </select>
                     <input type="text" placeholder="تفصيل التحرك (اختياري: أمام مول العرب)" value={newTrip.fromDetails} onChange={e => setNewTrip({...newTrip, fromDetails: e.target.value})} className={`w-full p-3 rounded-xl border font-medium text-xs outline-none ${bgInput}`}/>
                   </div>
@@ -1198,7 +1217,7 @@ export default function App() {
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                     <select required value={newTrip.to} onChange={e => setNewTrip({...newTrip, to: e.target.value})} className={`w-full p-3 rounded-xl border font-bold text-xs outline-none ${bgInput}`}>
                       <option value="" disabled>الوجهة / المحافظة *</option>
-                      {SUPPORTED_AREAS.map(c => <option key={c} value={c}>{c}</option>)}
+                      {allAreas.map(c => <option key={c} value={c}>{c}</option>)}
                     </select>
                     <input type="text" placeholder="تفصيل الوصول (اختياري)" value={newTrip.toDetails} onChange={e => setNewTrip({...newTrip, toDetails: e.target.value})} className={`w-full p-3 rounded-xl border font-medium text-xs outline-none ${bgInput}`}/>
                   </div>
@@ -1234,7 +1253,7 @@ export default function App() {
                         </div>
                       )}
                       <div className="flex flex-wrap gap-1.5 max-h-32 overflow-y-auto [&::-webkit-scrollbar]:hidden">
-                        {SUPPORTED_AREAS.filter(a => a !== newTrip.from && a !== newTrip.to).map(area => {
+                        {allAreas.filter(a => a !== newTrip.from && a !== newTrip.to).map(area => {
                           const isSelected = (newTrip.routeAreas || []).includes(area);
                           return (
                             <button
@@ -1388,7 +1407,7 @@ export default function App() {
 
       {activeTab === 'home' && (
         <HomeScreen 
-          user={user} isAdmin={isAdmin} isDarkMode={isDarkMode} realTrips={realTrips} stations={stations} links={links} isGuest={isGuest}
+          user={user} isAdmin={isAdmin} isDarkMode={isDarkMode} realTrips={realTrips} stations={stations} links={links} transit={transit} areas={allAreas} isGuest={isGuest}
           homeCategory={homeCategory} setHomeCategory={setHomeCategory} viewMode={viewMode} setViewMode={setViewMode} filterType={filterType} setFilterType={setFilterType}
           filterFrom={filterFrom} setFilterFrom={setFilterFrom} filterTo={filterTo} setFilterTo={setFilterTo} openChatFromTrip={openChatFromTrip}
           setSelectedStation={setSelectedStation} triggerToast={triggerToast} appSettings={appSettings} 
@@ -1398,7 +1417,7 @@ export default function App() {
       )}
 
       {selectedStation && (
-        <StationModal station={selectedStation} stations={stations} links={links} user={user} isAdmin={isAdmin} isGuest={isGuest} isDarkMode={isDarkMode} onClose={() => setSelectedStation(null)} triggerToast={triggerToast}/>
+        <StationModal station={selectedStation} stations={stations} links={links} transit={transit} user={user} isAdmin={isAdmin} isGuest={isGuest} isDarkMode={isDarkMode} onClose={() => setSelectedStation(null)} triggerToast={triggerToast}/>
       )}
 
       {activeTab === 'profile' && (
