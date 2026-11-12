@@ -364,38 +364,47 @@ export { createEngine, norm, tokenize, tokenMatch, stem, wantsPref };
 // =====================================================================
 export const GUIDES_COLLECTION = 'beso_knowledge_updates';
 
-// stations (اختياري): لو مرّرت قايمة مواقف جاهزة بيستخدمها، وإلا بيسمع على الـ Firestore بنفسه
-export function useTransitData({ stations: stationsProp, isAdmin = false } = {}) {
+// كل البارامترات اختيارية:
+//   stations / links / guides : لو مرّرتهم جاهزين (من App) بيستخدمهم بدل ما يفتح اشتراكات جديدة
+//   enabled=false             : يوقف الاشتراكات (لما المكوّن ياخد transit جاهز من فوق)
+export function useTransitData({ stations: stationsProp, links: linksProp, guides: guidesProp, isAdmin = false, enabled = true } = {}) {
   const [ownStations, setOwnStations] = useState([]);
-  const [links, setLinks] = useState([]);
-  const [guides, setGuides] = useState([]);
+  const [ownLinks, setOwnLinks] = useState([]);
+  const [ownGuides, setOwnGuides] = useState([]);
   const [loading, setLoading] = useState(true);
-  const useOwn = !Array.isArray(stationsProp) || stationsProp.length === 0;
+  const useOwnStations = enabled && (!Array.isArray(stationsProp) || stationsProp.length === 0);
+  const useOwnLinks = enabled && !Array.isArray(linksProp);
+  const useOwnGuides = enabled && !Array.isArray(guidesProp);
 
   useEffect(() => {
-    if (!useOwn) return undefined;
+    if (!useOwnStations) return undefined;
     const unsub = onSnapshot(collection(db, STATIONS_COLLECTION),
       (snap) => { setOwnStations(snap.docs.map(d => ({ id: d.id, ...d.data() }))); setLoading(false); },
       () => setLoading(false));
     return () => unsub();
-  }, [useOwn]);
+  }, [useOwnStations]);
 
   useEffect(() => {
+    if (!useOwnLinks) return undefined;
     const unsub = onSnapshot(collection(db, LINKS_COLLECTION),
-      (snap) => setLinks(snap.docs.map(d => ({ id: d.id, ...d.data() }))), () => setLinks([]));
+      (snap) => setOwnLinks(snap.docs.map(d => ({ id: d.id, ...d.data() }))), () => setOwnLinks([]));
     return () => unsub();
-  }, []);
+  }, [useOwnLinks]);
 
   useEffect(() => {
+    if (!useOwnGuides) return undefined;
     const unsub = onSnapshot(collection(db, GUIDES_COLLECTION),
-      (snap) => setGuides(snap.docs.map(d => ({ id: d.id, ...d.data() }))), () => setGuides([]));
+      (snap) => setOwnGuides(snap.docs.map(d => ({ id: d.id, ...d.data() }))), () => setOwnGuides([]));
     return () => unsub();
-  }, []);
+  }, [useOwnGuides]);
+
+  const rawStations = useOwnStations ? ownStations : (Array.isArray(stationsProp) ? stationsProp : []);
+  const links = Array.isArray(linksProp) ? linksProp : ownLinks;
+  const guides = Array.isArray(guidesProp) ? guidesProp : ownGuides;
 
   const stations = useMemo(
-    () => (useOwn ? ownStations : stationsProp)
-      .filter(s => s && s.id && s.status !== 'rejected' && (isAdmin || s.status !== 'pending')),
-    [useOwn, ownStations, stationsProp, isAdmin]
+    () => rawStations.filter(s => s && s.id && s.status !== 'rejected' && (isAdmin || s.status !== 'pending')),
+    [rawStations, isAdmin]
   );
   const engine = useMemo(() => createEngine(stations, links, !!isAdmin), [stations, links, isAdmin]);
   const search = useCallback((text) => smartSearch(engine, guides, text), [engine, guides]);
@@ -532,7 +541,7 @@ const RichText = ({ text }) => String(text || '').split(/(\*\*[^*]+\*\*)/g).map(
     : <React.Fragment key={i}>{p}</React.Fragment>
 );
 
-const BesoAssistantModal = ({ stations = [], isDarkMode, onClose, onSelectStation, userAreas = [], user, isAdmin, userLocation = null }) => {
+const BesoAssistantModal = ({ stations = [], links: linksProp, transit: transitProp = null, isDarkMode, onClose, onSelectStation, userAreas = [], user, isAdmin, userLocation = null }) => {
   const [input, setInput] = useState('');
   const [isTyping, setIsTyping] = useState(false);
   const [locStatus, setLocStatus] = useState('idle'); // idle | loading | ok | denied
@@ -548,7 +557,9 @@ const BesoAssistantModal = ({ stations = [], isDarkMode, onClose, onSelectStatio
   const ctxRef = useRef({ pendingDest: null, pendingOrigin: null, last: null, userCoords: null });
 
   // كل الداتا حية من لوحة الأدمن (مواقف + روابط + إرشادات) — أي تحديث بيوصل فوراً
-  const { stations: approvedStations, guides: customGuides, engine } = useTransitData({ stations, isAdmin });
+  // لو App مرّر transit جاهز بنستخدمه (من غير اشتراكات مكررة)، وإلا بنسحب بنفسنا
+  const ownTransit = useTransitData({ stations, links: linksProp, isAdmin, enabled: !transitProp });
+  const { stations: approvedStations, guides: customGuides, engine } = transitProp || ownTransit;
 
   const [messages, setMessages] = useState([
     {
