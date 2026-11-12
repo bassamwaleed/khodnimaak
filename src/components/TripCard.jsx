@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, memo } from 'react';
 import { doc, deleteDoc, getDoc } from 'firebase/firestore';
 import {
   Trash2, Share2, ShieldCheck, Star, Clock, Car, Package, CheckCircle2,
@@ -6,6 +6,19 @@ import {
 } from 'lucide-react';
 import { db, APP_COLLECTION_NAME, USERS_COLLECTION } from '../firebase';
 import { formatTripDateTime, getSeatsText } from '../utils/helpers';
+
+// كاش بسيط لبيانات الكباتن: لو 20 رحلة لنفس الكابتن بنقرأ بياناته مرة واحدة بدل 20 مرة
+const USER_CACHE_TTL = 2 * 60 * 1000;
+const userCache = new Map();
+const fetchUserData = (uid) => {
+  const hit = userCache.get(uid);
+  if (hit && Date.now() - hit.at < USER_CACHE_TTL) return hit.promise;
+  const promise = getDoc(doc(db, USERS_COLLECTION, uid))
+    .then((snap) => (snap.exists() ? snap.data() : null))
+    .catch(() => { userCache.delete(uid); return null; });
+  userCache.set(uid, { promise, at: Date.now() });
+  return promise;
+};
 
 const PREFERENCE_LABELS = {
   ac: 'تكييف ❄️',
@@ -39,27 +52,23 @@ const TripCard = ({
   }, [trip?.verified, trip?.userBadge]);
 
   useEffect(() => {
-    if (!trip?.userId) return;
+    if (!trip?.userId) return undefined;
     let isMounted = true;
-    getDoc(doc(db, USERS_COLLECTION, trip.userId))
-      .then((snap) => {
-        if (isMounted && snap.exists()) {
-          const uData = snap.data();
-          if (!trip?.userPhone && trip?.allowPhoneContact !== false && uData?.phone) {
-            setContactPhone(uData.phone);
-          }
-          if (typeof uData?.isVerified === 'boolean') setLiveVerified(uData.isVerified);
-          if (uData?.customBadge !== undefined) setLiveBadge(uData.customBadge);
-          if (uData?.rating !== undefined) setLiveRating(Number(uData.rating));
-          if (Array.isArray(uData?.reviews)) setLiveReviewsCount(uData.reviews.length);
-          else if (uData?.ratingsCount) setLiveReviewsCount(Number(uData.ratingsCount));
-          if (!trip?.carModel && uData?.carModel) {
-            setLiveCarModel(uData.carModel);
-            setLiveCarColor(uData.carColor || '');
-          }
-        }
-      })
-      .catch(() => {});
+    fetchUserData(trip.userId).then((uData) => {
+      if (!isMounted || !uData) return;
+      if (!trip?.userPhone && trip?.allowPhoneContact !== false && uData?.phone) {
+        setContactPhone(uData.phone);
+      }
+      if (typeof uData?.isVerified === 'boolean') setLiveVerified(uData.isVerified);
+      if (uData?.customBadge !== undefined) setLiveBadge(uData.customBadge);
+      if (uData?.rating !== undefined) setLiveRating(Number(uData.rating));
+      if (Array.isArray(uData?.reviews)) setLiveReviewsCount(uData.reviews.length);
+      else if (uData?.ratingsCount) setLiveReviewsCount(Number(uData.ratingsCount));
+      if (!trip?.carModel && uData?.carModel) {
+        setLiveCarModel(uData.carModel);
+        setLiveCarColor(uData.carColor || '');
+      }
+    });
     return () => { isMounted = false; };
   }, [trip?.userPhone, trip?.userId, trip?.allowPhoneContact, trip?.carModel]);
 
@@ -95,6 +104,7 @@ const TripCard = ({
 
   const handleDelete = async (e) => {
     e.stopPropagation();
+    if (typeof window !== 'undefined' && !window.confirm('متأكد إنك عايز تحذف الإعلان ده؟')) return;
     try {
       await deleteDoc(doc(db, APP_COLLECTION_NAME, trip.id));
       triggerToast('تم الحذف بنجاح');
@@ -177,7 +187,7 @@ const TripCard = ({
               </span>
               <span className={`inline-flex items-center gap-0.5 text-xs font-bold ${textSecondary}`}>
                 <Star size={10} className="fill-amber-400 text-amber-400" />
-                {liveRating > 0 ? liveRating.toFixed(1) : 'جديد'}
+                {liveRating > 0 ? liveRating.toFixed(1) : 'جديد'}{liveRating > 0 && liveReviewsCount > 0 ? ` (${liveReviewsCount})` : ''}
               </span>
               {liveBadge && (
                 <span className="text-xs font-bold px-1.5 py-0.5 rounded bg-amber-400/15 text-amber-600 dark:text-amber-400 shrink-0">
@@ -279,7 +289,7 @@ const TripCard = ({
       {joinedMembers.length > 0 && (
         <p className="flex items-center gap-1 text-xs font-bold text-emerald-600 dark:text-emerald-400 truncate">
           <Users size={12} className="shrink-0" />
-          <span>انضم: {joinedMembers.map((m) => `${m.name?.split(' ')[0] || 'راكب'}${m.seats > 1 ? ` (${m.seats})` : ''}`).join('، ')}</span>
+          <span>انضم: {joinedMembers.map((m) => `${m.name?.split(' ')[0] || 'راكب'}${m.seats > 1 ? ` (${m.seats})` : ''}${isOwner && m.agreedPrice ? ` • ${m.agreedPrice} ج` : ''}`).join('، ')}</span>
         </p>
       )}
 
@@ -375,4 +385,4 @@ const TripCard = ({
   );
 };
 
-export default TripCard;
+export default memo(TripCard);
