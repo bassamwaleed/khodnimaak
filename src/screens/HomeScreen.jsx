@@ -2,13 +2,14 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   Bell, BusFront, MapPinned, List, X, ChevronRight, ChevronLeft, Plus, 
   Loader2, ChevronLeft as ChevronLeftIcon, Search, MapPin, Sparkles, Compass, 
-  Car, CheckCircle2, Package, Shuffle, Bot, Layers, ArrowLeftRight, Check, Navigation
+  Car, CheckCircle2, Package, Shuffle, Bot, Layers, ArrowLeftRight, Check, Navigation, SlidersHorizontal
 } from 'lucide-react';
 import TripCard from '../components/TripCard';
 import BesoAssistantModal from '../components/BesoAssistantModal';
 import { collection, addDoc } from 'firebase/firestore';
 import { db, STATIONS_COLLECTION } from '../firebase';
 import JourneyPlanner from '../components/JourneyPlanner';
+import useBackClose from '../hooks/useBackClose';
 import { SUPPORTED_AREAS, NEARBY_AREAS_MAP, normalizeArabic } from '../App';
 import { EGYPT_CITIES, getPlaceCoords, getDistanceKm, isPointNearRoute, escapeHtml } from '../utils/helpers';
 
@@ -17,7 +18,7 @@ const HomeScreen = ({
   homeCategory, setHomeCategory, viewMode, setViewMode, filterType, setFilterType,
   filterFrom, setFilterFrom, filterTo, setFilterTo, openChatFromTrip,
   setSelectedStation, triggerToast, appSettings, userArea, userAreas = [], onOpenAreaModal,
-  onOpenPublicProfile, hasActiveTracker = false
+  onOpenPublicProfile, hasActiveTracker = false, transit = null
 }) => {
   
   const [stationSearchQuery, setStationSearchQuery] = useState('');
@@ -37,6 +38,9 @@ const HomeScreen = ({
   const [areaTouchEnd, setAreaTouchEnd] = useState(null);
   const [shuffleSeed, setShuffleSeed] = useState(() => Math.random());
   const [showBesoModal, setShowBesoModal] = useState(false);
+  const [showFilters, setShowFilters] = useState(false);
+  const [showStationFilters, setShowStationFilters] = useState(false);
+  const [bannerHidden, setBannerHidden] = useState(false);
 
   // حالات الخريطة التفاعلية الحية (للأدمن فقط)
   const userMapContainerRef = useRef(null);
@@ -471,6 +475,14 @@ const HomeScreen = ({
     !locationPickerSearch.trim() || normalizeArabic(a).includes(normalizeArabic(locationPickerSearch))
   );
 
+  // زرار/سحبة الرجوع تقفل النافذة المفتوحة بدل ما تخرج من الموقع
+  useBackClose(Boolean(locationPickerType), () => { setLocationPickerType(null); setLocationPickerSearch(''); });
+  useBackClose(showBesoModal, () => setShowBesoModal(false));
+  useBackClose(showAddStation, () => setShowAddStation(false));
+  useBackClose(viewMode === 'map' && isAdmin, () => setViewMode('list'));
+
+  const activeFiltersCount = (quickFilter !== 'all' ? 1 : 0) + (showCompletedTrips ? 1 : 0);
+
   const bgInput = isDarkMode ? 'bg-slate-800 border-slate-700 text-white placeholder-slate-400 focus:border-indigo-500' : 'bg-white border-slate-200 text-slate-900 focus:border-indigo-500';
   const textPrimary = isDarkMode ? 'text-white' : 'text-slate-900';
   const bgCard = isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200';
@@ -492,16 +504,16 @@ const HomeScreen = ({
       {/* أيقونة المساعد الذكي */}
       <button
         type="button"
+        aria-label="اسأل بيسو"
         onClick={() => setShowBesoModal(true)}
-        className={`fixed ${hasActiveTracker ? 'bottom-[150px]' : 'bottom-[80px]'} left-3 sm:left-8 z-50 flex items-center gap-1.5 px-3 py-2 rounded-full bg-indigo-600 text-white shadow-xl shadow-indigo-500/30 border border-white/20 hover:scale-105 active:scale-95 transition-all duration-300 ${
+        className={`fixed ${hasActiveTracker ? 'bottom-[150px]' : 'bottom-[80px]'} left-3 sm:left-8 z-50 flex items-center justify-center w-11 h-11 rounded-full bg-indigo-600 text-white shadow-xl shadow-indigo-500/30 border border-white/20 hover:scale-105 active:scale-95 transition-all duration-300 ${
           isScrolling ? 'translate-y-28 opacity-0 pointer-events-none scale-75' : 'translate-y-0 opacity-100 scale-100'
         }`}
       >
         <div className="relative flex items-center justify-center">
-          <Bot size={18} />
+          <Bot size={20} />
           <span className="absolute -top-0.5 -right-0.5 w-2 h-2 bg-emerald-400 rounded-full border border-indigo-900"></span>
         </div>
-        <span className="text-xs font-black tracking-tight">اسأل بيسو 🤖</span>
       </button>
 
       {/* نافذة اختيار المنطقة السريعة */}
@@ -572,14 +584,15 @@ const HomeScreen = ({
             </div>
           )}
 
-          {banners.length > 0 && (
+          {banners.length > 0 && !bannerHidden && (
             <div
-              className="relative w-full h-24 sm:h-40 rounded-2xl overflow-hidden shadow-sm border dark:border-slate-800 bg-slate-100 dark:bg-slate-800 group"
+              className="relative w-full h-20 sm:h-36 rounded-2xl overflow-hidden shadow-sm border dark:border-slate-800 bg-slate-100 dark:bg-slate-800 group"
               onTouchStart={onTouchStart} onTouchMove={onTouchMove} onTouchEnd={onTouchEndHandler}
             >
               {banners.map((imgUrl, idx) => (
                 <img key={idx} src={imgUrl} alt={`Banner ${idx}`} className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-500 ease-in-out ${idx === currentSlide ? 'opacity-100 z-10' : 'opacity-0 z-0'}`} />
               ))}
+              <button type="button" aria-label="إخفاء البانر" onClick={() => setBannerHidden(true)} className="absolute top-1.5 left-1.5 z-20 bg-black/40 text-white p-1 rounded-full backdrop-blur-sm"><X size={12} /></button>
               {banners.length > 1 && (
                 <>
                   <button onClick={prevSlide} className="absolute right-1.5 top-1/2 -translate-y-1/2 z-20 bg-black/35 hover:bg-black/55 text-white p-1 rounded-full backdrop-blur-sm transition-all md:opacity-0 group-hover:opacity-100"><ChevronRight size={14} /></button>
@@ -600,14 +613,14 @@ const HomeScreen = ({
       <div className={`grid ${isAdmin ? 'grid-cols-4' : 'grid-cols-3'} gap-1.5 mb-2.5 pointer-events-auto relative z-10`}>
         <button
           onClick={() => { setViewMode('list'); setHomeCategory('travel'); setFilterTo(''); setShowCompletedTrips(false); }}
-          className={`relative flex items-center justify-center gap-1.5 py-2 px-2 rounded-xl border transition-all duration-200 ${
+          className={`relative flex items-center justify-center gap-1.5 py-1.5 px-2 rounded-xl border transition-all duration-200 ${
             viewMode === 'list' && homeCategory === 'travel' ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm' : `${bgCard} text-slate-600 dark:text-slate-300 hover:border-indigo-400`
           }`}
         >
           <Car size={17} className="shrink-0" />
           <span className="text-xs font-black tracking-tight">سفريات</span>
           {availableTravelCount > 0 && (
-            <span className={`px-1.5 py-0.5 rounded-full text-xs font-black ${viewMode === 'list' && homeCategory === 'travel' ? 'bg-white text-indigo-600' : 'bg-rose-500 text-white'}`}>
+            <span className={`px-1.5 py-0.5 rounded-full text-xs font-black ${viewMode === 'list' && homeCategory === 'travel' ? 'bg-white text-indigo-600' : 'bg-indigo-500/15 text-indigo-500 dark:text-indigo-300'}`}>
               {availableTravelCount}
             </span>
           )}
@@ -615,14 +628,14 @@ const HomeScreen = ({
 
         <button
           onClick={() => { setViewMode('list'); setHomeCategory('parcel'); setFilterTo(''); setShowCompletedTrips(false); }}
-          className={`relative flex items-center justify-center gap-1.5 py-2 px-2 rounded-xl border transition-all duration-200 ${
+          className={`relative flex items-center justify-center gap-1.5 py-1.5 px-2 rounded-xl border transition-all duration-200 ${
             viewMode === 'list' && homeCategory === 'parcel' ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm' : `${bgCard} text-slate-600 dark:text-slate-300 hover:border-indigo-400`
           }`}
         >
           <Package size={17} className="shrink-0" />
           <span className="text-xs font-black tracking-tight">توصيل</span>
           {availableParcelCount > 0 && (
-            <span className={`px-1.5 py-0.5 rounded-full text-xs font-black ${viewMode === 'list' && homeCategory === 'parcel' ? 'bg-white text-indigo-600' : 'bg-rose-500 text-white'}`}>
+            <span className={`px-1.5 py-0.5 rounded-full text-xs font-black ${viewMode === 'list' && homeCategory === 'parcel' ? 'bg-white text-indigo-600' : 'bg-indigo-500/15 text-indigo-500 dark:text-indigo-300'}`}>
               {availableParcelCount}
             </span>
           )}
@@ -630,7 +643,7 @@ const HomeScreen = ({
 
         <button
           onClick={() => { setViewMode('list'); setHomeCategory('stations'); setFilterTo(''); }}
-          className={`relative flex items-center justify-center gap-1.5 py-2 px-2 rounded-xl border transition-all duration-200 ${
+          className={`relative flex items-center justify-center gap-1.5 py-1.5 px-2 rounded-xl border transition-all duration-200 ${
             viewMode === 'list' && homeCategory === 'stations' ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm' : `${bgCard} text-slate-600 dark:text-slate-300 hover:border-indigo-400`
           }`}
         >
@@ -641,7 +654,7 @@ const HomeScreen = ({
         {isAdmin && (
           <button
             onClick={() => setViewMode(viewMode === 'list' ? 'map' : 'list')}
-            className={`relative flex items-center justify-center gap-1.5 py-2 px-2 rounded-xl border transition-all duration-200 ${
+            className={`relative flex items-center justify-center gap-1.5 py-1.5 px-2 rounded-xl border transition-all duration-200 ${
               viewMode === 'map' ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm' : `${bgCard} text-slate-600 dark:text-slate-300 hover:border-indigo-400`
             }`}
           >
@@ -656,24 +669,6 @@ const HomeScreen = ({
           {/* 3. صندوق البحث والفلترة المدمج في سطر واحد (من ⇄ إلى) */}
           {(homeCategory === 'travel' || homeCategory === 'parcel') && (
             <section aria-label="بحث وفلترة الرحلات" className={`mb-3 p-2.5 rounded-2xl border shadow-sm space-y-2 ${isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200'}`}>
-
-              {homeCategory === 'travel' && (
-                <div role="tablist" className={`grid grid-cols-2 p-1 rounded-xl ${isDarkMode ? 'bg-slate-800' : 'bg-slate-100'}`}>
-                  {[{ id: 'offer', label: '🚗 رحلات سائقين' }, { id: 'request', label: '🙋‍♂️ طلبات ركاب' }].map(t => (
-                    <button
-                      key={t.id} type="button" role="tab" aria-selected={filterType === t.id}
-                      onClick={() => setFilterType(t.id)}
-                      className={`h-8 rounded-lg text-xs font-black transition-colors ${
-                        filterType === t.id
-                          ? (isDarkMode ? 'bg-indigo-600 text-white shadow-sm' : 'bg-white text-indigo-700 shadow-sm')
-                          : 'text-slate-500 dark:text-slate-400'
-                      }`}
-                    >
-                      {t.label}
-                    </button>
-                  ))}
-                </div>
-              )}
 
               {/* من ⇄ إلى في سطر واحد مدمج بدلاً من سطرين */}
               <div className="flex items-center gap-1.5">
@@ -718,42 +713,74 @@ const HomeScreen = ({
                 )}
               </div>
 
-              {/* شريط الفلاتر السريعة */}
-              <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5 [&::-webkit-scrollbar]:hidden">
-                {[
-                  { id: 'all', label: `متاحة (${availableTripsList.length})` },
-                  { id: 'urgent', label: 'قريباً 🔥' },
-                  { id: 'verified', label: 'موثق ✅' },
-                  { id: 'females', label: 'بنات فقط 🌸' },
-                  { id: 'ac', label: 'مكيفة ❄️' }
-                ].map(chip => {
-                  const active = !showCompletedTrips && quickFilter === chip.id;
-                  return (
-                    <button
-                      key={chip.id} type="button" aria-pressed={active}
-                      onClick={() => { setShowCompletedTrips(false); setQuickFilter(chip.id); }}
-                      className={`h-8 px-3 rounded-full text-xs font-black border shrink-0 transition-colors ${
-                        active
-                          ? (chip.id === 'females' ? 'bg-pink-600 text-white border-pink-600' : 'bg-indigo-600 text-white border-indigo-600')
-                          : (isDarkMode ? 'bg-slate-800 border-slate-700 text-slate-300' : 'bg-white border-slate-200 text-slate-600')
-                      }`}
-                    >
-                      {chip.label}
-                    </button>
-                  );
-                })}
-
+              {/* سطر واحد: نوع الرحلة + زر الفلاتر */}
+              <div className="flex items-center gap-1.5">
+                {homeCategory === 'travel' && (
+                  <div role="tablist" className={`flex-1 grid grid-cols-2 p-0.5 rounded-xl ${isDarkMode ? 'bg-slate-800' : 'bg-slate-100'}`}>
+                    {[{ id: 'offer', label: '🚗 سائقين' }, { id: 'request', label: '🙋 ركاب' }].map(t => (
+                      <button
+                        key={t.id} type="button" role="tab" aria-selected={filterType === t.id}
+                        onClick={() => setFilterType(t.id)}
+                        className={`h-8 rounded-lg text-xs font-black transition-colors ${
+                          filterType === t.id
+                            ? (isDarkMode ? 'bg-indigo-600 text-white shadow-sm' : 'bg-white text-indigo-700 shadow-sm')
+                            : 'text-slate-500 dark:text-slate-400'
+                        }`}
+                      >
+                        {t.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
                 <button
-                  type="button" aria-pressed={showCompletedTrips}
-                  onClick={() => setShowCompletedTrips(!showCompletedTrips)}
-                  className={`h-8 px-3 rounded-full text-xs font-black border shrink-0 transition-colors flex items-center gap-1 ${
-                    showCompletedTrips ? 'bg-emerald-600 text-white border-emerald-600' : (isDarkMode ? 'bg-slate-800 border-slate-700 text-emerald-400' : 'bg-white border-emerald-200 text-emerald-700')
+                  type="button" aria-expanded={showFilters} onClick={() => setShowFilters(v => !v)}
+                  className={`h-9 px-3 rounded-xl border text-xs font-black flex items-center justify-center gap-1.5 shrink-0 transition-colors ${homeCategory === 'travel' ? '' : 'flex-1'} ${
+                    showFilters || activeFiltersCount > 0 ? 'bg-indigo-600 text-white border-indigo-600' : bgInput
                   }`}
                 >
-                  <CheckCircle2 size={12} />
-                  <span>مكتملة ({completedTripsList.length})</span>
+                  <SlidersHorizontal size={14} />
+                  <span>فلاتر</span>
+                  {activeFiltersCount > 0 && <span className="bg-white text-indigo-600 rounded-full px-1.5 text-xs font-black">{activeFiltersCount}</span>}
                 </button>
               </div>
+
+              {/* الفلاتر السريعة: مخفية لحد ما المستخدم يفتحها */}
+              {showFilters && (
+                <div className="flex items-center gap-1.5 flex-wrap animate-fade-in-up">
+                  {[
+                    { id: 'all', label: `الكل (${availableTripsList.length})` },
+                    { id: 'urgent', label: 'قريباً 🔥' },
+                    { id: 'verified', label: 'موثق ✅' },
+                    { id: 'females', label: 'بنات فقط 🌸' },
+                    { id: 'ac', label: 'مكيفة ❄️' }
+                  ].map(chip => {
+                    const active = !showCompletedTrips && quickFilter === chip.id;
+                    return (
+                      <button
+                        key={chip.id} type="button" aria-pressed={active}
+                        onClick={() => { setShowCompletedTrips(false); setQuickFilter(chip.id); }}
+                        className={`h-8 px-3 rounded-full text-xs font-black border shrink-0 transition-colors ${
+                          active
+                            ? (chip.id === 'females' ? 'bg-pink-600 text-white border-pink-600' : 'bg-indigo-600 text-white border-indigo-600')
+                            : (isDarkMode ? 'bg-slate-800 border-slate-700 text-slate-300' : 'bg-white border-slate-200 text-slate-600')
+                        }`}
+                      >
+                        {chip.label}
+                      </button>
+                    );
+                  })}
+                  <button
+                    type="button" aria-pressed={showCompletedTrips}
+                    onClick={() => setShowCompletedTrips(!showCompletedTrips)}
+                    className={`h-8 px-3 rounded-full text-xs font-black border shrink-0 transition-colors flex items-center gap-1 ${
+                      showCompletedTrips ? 'bg-emerald-600 text-white border-emerald-600' : (isDarkMode ? 'bg-slate-800 border-slate-700 text-emerald-400' : 'bg-white border-emerald-200 text-emerald-700')
+                    }`}
+                  >
+                    <CheckCircle2 size={12} />
+                    <span>مكتملة ({completedTripsList.length})</span>
+                  </button>
+                </div>
+              )}
             </section>
           )}
 
@@ -778,6 +805,9 @@ const HomeScreen = ({
                        />
                        {stationSearchQuery && <button onClick={() => setStationSearchQuery('')}><X size={13} className="text-slate-400 hover:text-rose-500"/></button>}
                      </div>
+                     <button type="button" aria-label="فلاتر المواقف" aria-expanded={showStationFilters} onClick={() => setShowStationFilters(v => !v)} className={`w-10 rounded-xl border flex items-center justify-center shrink-0 h-full ${showStationFilters || stationLocationFilter !== 'all' || stationCrowdFilter !== 'all' ? 'bg-indigo-600 text-white border-indigo-600' : bgInput}`}>
+                       <SlidersHorizontal size={15} />
+                     </button>
                      {!isGuest && (
                        <button onClick={() => setShowAddStation(true)} className="flex items-center justify-center gap-1 px-3 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 transition-colors shrink-0 h-full text-xs font-black shadow-sm">
                          <Plus size={14}/> <span>أضف موقف</span>
@@ -785,7 +815,8 @@ const HomeScreen = ({
                      )}
                    </div>
 
-                   <div className="flex items-center justify-between gap-1.5 flex-wrap">
+                   {showStationFilters && (
+                   <div className="flex items-center justify-between gap-1.5 flex-wrap animate-fade-in-up">
                      <div className="flex items-center gap-1 overflow-x-auto flex-1 [&::-webkit-scrollbar]:hidden">
                        <button
                          type="button"
@@ -825,6 +856,7 @@ const HomeScreen = ({
                        ))}
                      </div>
                    </div>
+                   )}
                  </div>
 
                  {visibleStations.length === 0 ? (
@@ -1125,6 +1157,7 @@ const HomeScreen = ({
           userAreas={activeUserAreas}
           user={user}
           isAdmin={isAdmin}
+          transit={transit}
         />
       )}
 
