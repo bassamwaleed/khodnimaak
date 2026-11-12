@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import SuggestLinkModal from './SuggestLinkModal';
+import useBackClose from '../hooks/useBackClose';
 import { isApprovedLink } from '../utils/gis';
 import { LINK_KINDS } from '../utils/gisConstants';
 import { doc, getDoc, updateDoc, deleteDoc, collection, query, where, getDocs, writeBatch } from 'firebase/firestore';
@@ -39,6 +40,10 @@ const StationModal = ({ station, stations = [], links = [], user, isAdmin, isGue
     .filter(l => isApprovedLink(l) && (l.fromId === station.id || l.toId === station.id))
     .map(l => ({ link: l, other: stations.find(x => x.id === (l.fromId === station.id ? l.toId : l.fromId)) }))
     .filter(x => x.other);
+
+  // زرار/سحبة الرجوع تقفل المودال بدل ما تخرج من الموقع
+  useBackClose(true, onClose);
+  useBackClose(showSuggestLink, () => setShowSuggestLink(false));
 
   const currentTypeObj = NODE_TYPES.find(t => t.id === (station.nodeType || 'station')) || NODE_TYPES[0];
 
