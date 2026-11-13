@@ -5,7 +5,7 @@ import {
   Car, CheckCircle2, Package, Shuffle, Bot, Layers, ArrowLeftRight, Check, Navigation, SlidersHorizontal
 } from 'lucide-react';
 import TripCard from '../components/TripCard';
-import BesoAssistantModal from '../components/BesoAssistantModal';
+import BesoAssistantModal, { stationConnections } from '../components/BesoAssistantModal';
 import { collection, addDoc } from 'firebase/firestore';
 import { db, STATIONS_COLLECTION } from '../firebase';
 import JourneyPlanner from '../components/JourneyPlanner';
@@ -13,7 +13,7 @@ import { SUPPORTED_AREAS, NEARBY_AREAS_MAP, normalizeArabic } from '../App';
 import { EGYPT_CITIES, getPlaceCoords, getDistanceKm, isPointNearRoute, escapeHtml } from '../utils/helpers';
 
 const HomeScreen = ({
-  user, isAdmin, isDarkMode, realTrips, stations, links = [], isGuest,
+  user, isAdmin, isDarkMode, realTrips, stations, links = [], transit = null, areas = SUPPORTED_AREAS, isGuest,
   homeCategory, setHomeCategory, viewMode, setViewMode, filterType, setFilterType,
   filterFrom, setFilterFrom, filterTo, setFilterTo, openChatFromTrip,
   setSelectedStation, triggerToast, appSettings, userArea, userAreas = [], onOpenAreaModal,
@@ -40,6 +40,8 @@ const HomeScreen = ({
   const [showFilters, setShowFilters] = useState(false);
   const [showStationFilters, setShowStationFilters] = useState(false);
   const [bannerHidden, setBannerHidden] = useState(false);
+
+  const effectiveAreas = Array.isArray(areas) && areas.length > 0 ? areas : SUPPORTED_AREAS;
 
   // حالات الخريطة التفاعلية الحية (للأدمن فقط)
   const userMapContainerRef = useRef(null);
@@ -238,32 +240,87 @@ const HomeScreen = ({
     setFilterFrom(filterTo); setFilterTo(temp);
   };
 
+  const baseStations = useMemo(() => {
+    if (transit?.stations && transit.stations.length > 0) return transit.stations;
+    return (stations || []).filter(s => s && s.status !== 'rejected' && (isAdmin || s.status !== 'pending'));
+  }, [transit?.stations, stations, isAdmin]);
+
   const availableStationLocations = useMemo(() => {
     const locs = new Set();
-    (stations || []).forEach(s => {
-      const isApprovedOrAdmin = isAdmin ? true : (s.status === 'approved' || !s.status);
-      if (isApprovedOrAdmin) {
-        if (s.governorate) locs.add(s.governorate);
-        if (s.location) locs.add(s.location);
-      }
+    baseStations.forEach(s => {
+      if (s.governorate) locs.add(s.governorate);
+      if (s.location) locs.add(s.location);
     });
     return Array.from(locs);
-  }, [stations, isAdmin]);
+  }, [baseStations]);
 
-  const visibleStations = (stations || []).filter(s => {
-    const isApprovedOrAdmin = isAdmin ? true : (s.status === 'approved' || !s.status);
-    if (!isApprovedOrAdmin) return false;
-    if (stationCrowdFilter !== 'all' && s.crowdStatus !== stationCrowdFilter) return false;
-    if (stationLocationFilter !== 'all' && s.location !== stationLocationFilter && s.governorate !== stationLocationFilter) return false;
-    if (stationSearchQuery.trim() !== '') {
-      const q = normalizeArabic(stationSearchQuery);
+  // البحث الذكي في المواقف باستخدام محرك transit.search (يدعم المرادفات + استعلامات المسار + روابط GIS)
+  const smartSearchOutput = useMemo(() => {
+    if (!stationSearchQuery.trim() || !transit?.search) return null;
+    return transit.search(stationSearchQuery);
+  }, [stationSearchQuery, transit]);
+
+  const visibleStations = useMemo(() => {
+    let list = baseStations.filter(s => {
+      if (stationCrowdFilter !== 'all' && s.crowdStatus !== stationCrowdFilter) return false;
+      if (stationLocationFilter !== 'all' && s.location !== stationLocationFilter && s.governorate !== stationLocationFilter) return false;
+      return true;
+    });
+
+    if (!stationSearchQuery.trim()) return list;
+
+    const q = normalizeArabic(stationSearchQuery);
+    const smartMatchedIds = new Set();
+
+    if (smartSearchOutput) {
+      if (smartSearchOutput.kind === 'places' && Array.isArray(smartSearchOutput.stations)) {
+        smartSearchOutput.stations.forEach(st => smartMatchedIds.add(st.id));
+      } else if (smartSearchOutput.kind === 'route') {
+        (smartSearchOutput.origin?.candidates || []).forEach(c => smartMatchedIds.add(c.st.id));
+        (smartSearchOutput.dest?.candidates || []).forEach(c => smartMatchedIds.add(c.st.id));
+      }
+    }
+
+    return list.filter(s => {
+      if (smartMatchedIds.has(s.id)) return true;
       const matchName = normalizeArabic(s.name).includes(q);
       const matchLoc = normalizeArabic(s.location).includes(q) || normalizeArabic(s.governorate).includes(q);
+      const matchHint = normalizeArabic(s.transferHint).includes(q);
       const matchRoutes = Array.isArray(s.routes) && s.routes.some(r => normalizeArabic(r.destination).includes(q) || normalizeArabic(r.destinationDetails).includes(q));
-      return matchName || matchLoc || matchRoutes;
-    }
-    return true;
-  });
+      const conns = transit?.engine ? stationConnections(transit.engine, s.id) : [];
+      const matchConns = conns.some(c => normalizeArabic(c.station?.name).includes(q) || normalizeArabic(c.station?.location).includes(q));
+      return matchName || matchLoc || matchHint || matchRoutes || matchConns;
+    });
+  }, [baseStations, stationCrowdFilter, stationLocationFilter, stationSearchQuery, smartSearchOutput, transit?.engine]);
+
+  // دمج خطوط الموقف المباشرة مع روابط شبكة الـ GIS (عشان مفيش كارت موقف يظهر فاضي)
+  const getStationDisplayRoutes = (station) => {
+    const manualRoutes = (station.routes || [])
+      .filter(r => isAdmin || r.status !== 'pending')
+      .map(r => ({
+        title: r.destinationDetails || r.destination,
+        fare: r.fare,
+        boarding: r.boardingHint || ''
+      }));
+
+    const gisConns = transit?.engine ? stationConnections(transit.engine, station.id) : [];
+    const seen = new Set(manualRoutes.map(r => normalizeArabic(r.title)));
+
+    gisConns.forEach(c => {
+      const name = c.station?.name || '';
+      const normName = normalizeArabic(name);
+      if (name && !seen.has(normName)) {
+        seen.add(normName);
+        manualRoutes.push({
+          title: name,
+          fare: c.fare,
+          boarding: c.boarding || c.note || ''
+        });
+      }
+    });
+
+    return manualRoutes;
+  };
 
   // تحميل مكتبة الخريطة Leaflet تلقائياً عند فتح وضع الخريطة للأدمن
   useEffect(() => {
@@ -458,17 +515,17 @@ const HomeScreen = ({
 
   const areaTripCounts = useMemo(() => {
     const counts = {};
-    SUPPORTED_AREAS.forEach(a => { counts[a] = 0; });
+    effectiveAreas.forEach(a => { counts[a] = 0; });
     availableTripsList.forEach(t => {
-      SUPPORTED_AREAS.forEach(a => { if (isTripMatchingOriginOrRoute(t, a) || isAreaMatch(t.to, a)) counts[a] = (counts[a] || 0) + 1; });
+      effectiveAreas.forEach(a => { if (isTripMatchingOriginOrRoute(t, a) || isAreaMatch(t.to, a)) counts[a] = (counts[a] || 0) + 1; });
     });
     return counts;
-  }, [availableTripsList]);
+  }, [availableTripsList, effectiveAreas]);
 
   const allPickerLocations = useMemo(() => {
-    const combined = [...SUPPORTED_AREAS, ...EGYPT_CITIES];
+    const combined = [...effectiveAreas, ...EGYPT_CITIES];
     return combined.filter((item, pos) => combined.indexOf(item) === pos);
-  }, []);
+  }, [effectiveAreas]);
 
   const filteredPickerAreas = allPickerLocations.filter(a => 
     !locationPickerSearch.trim() || normalizeArabic(a).includes(normalizeArabic(locationPickerSearch))
@@ -478,6 +535,7 @@ const HomeScreen = ({
 
   const bgInput = isDarkMode ? 'bg-slate-800 border-slate-700 text-white placeholder-slate-400 focus:border-indigo-500' : 'bg-white border-slate-200 text-slate-900 focus:border-indigo-500';
   const textPrimary = isDarkMode ? 'text-white' : 'text-slate-900';
+  const textSecondary = isDarkMode ? 'text-slate-400' : 'text-slate-500';
   const bgCard = isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200';
   const currentSpotlightTrip = exactMatchedTrips[areaSlideIndex] || exactMatchedTrips[0];
 
@@ -499,14 +557,15 @@ const HomeScreen = ({
         type="button"
         aria-label="اسأل بيسو"
         onClick={() => setShowBesoModal(true)}
-        className={`fixed ${hasActiveTracker ? 'bottom-[150px]' : 'bottom-[80px]'} left-3 sm:left-8 z-50 flex items-center justify-center w-11 h-11 rounded-full bg-indigo-600 text-white shadow-xl shadow-indigo-500/30 border border-white/20 hover:scale-105 active:scale-95 transition-all duration-300 ${
+        className={`fixed ${hasActiveTracker ? 'bottom-[150px]' : 'bottom-[80px]'} left-3 sm:left-8 z-50 flex items-center gap-1.5 px-3 py-2 rounded-full bg-indigo-600 text-white shadow-xl shadow-indigo-500/30 border border-white/20 hover:scale-105 active:scale-95 transition-all duration-300 ${
           isScrolling ? 'translate-y-28 opacity-0 pointer-events-none scale-75' : 'translate-y-0 opacity-100 scale-100'
         }`}
       >
         <div className="relative flex items-center justify-center">
-          <Bot size={20} />
+          <Bot size={18} />
           <span className="absolute -top-0.5 -right-0.5 w-2 h-2 bg-emerald-400 rounded-full border border-indigo-900"></span>
         </div>
+        <span className="text-xs font-black tracking-tight">اسأل بيسو 🤖</span>
       </button>
 
       {/* نافذة اختيار المنطقة السريعة */}
@@ -602,7 +661,7 @@ const HomeScreen = ({
         </div>
       )}
 
-      {/* 2. شريط الأقسام المدمج (أفقياً وأقل ارتفاعاً لتوفير مساحة الشاشة) */}
+      {/* 2. شريط الأقسام المدمج */}
       <div className={`grid ${isAdmin ? 'grid-cols-4' : 'grid-cols-3'} gap-1.5 mb-2.5 pointer-events-auto relative z-10`}>
         <button
           onClick={() => { setViewMode('list'); setHomeCategory('travel'); setFilterTo(''); setShowCompletedTrips(false); }}
@@ -663,7 +722,6 @@ const HomeScreen = ({
           {(homeCategory === 'travel' || homeCategory === 'parcel') && (
             <section aria-label="بحث وفلترة الرحلات" className={`mb-3 p-2.5 rounded-2xl border shadow-sm space-y-2 ${isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200'}`}>
 
-              {/* من ⇄ إلى في سطر واحد مدمج بدلاً من سطرين */}
               <div className="flex items-center gap-1.5">
                 <button
                   type="button"
@@ -706,7 +764,6 @@ const HomeScreen = ({
                 )}
               </div>
 
-              {/* سطر واحد: نوع الرحلة + زر الفلاتر */}
               <div className="flex items-center gap-1.5">
                 {homeCategory === 'travel' && (
                   <div role="tablist" className={`flex-1 grid grid-cols-2 p-0.5 rounded-xl ${isDarkMode ? 'bg-slate-800' : 'bg-slate-100'}`}>
@@ -737,7 +794,6 @@ const HomeScreen = ({
                 </button>
               </div>
 
-              {/* الفلاتر السريعة: مخفية لحد ما المستخدم يفتحها */}
               {showFilters && (
                 <div className="flex items-center gap-1.5 flex-wrap animate-fade-in-up">
                   {[
@@ -781,7 +837,8 @@ const HomeScreen = ({
              {homeCategory === 'stations' ? (
                <>
                  <JourneyPlanner
-                   stations={stations} links={links} user={user} isGuest={isGuest} isAdmin={isAdmin}
+                   stations={baseStations} links={links} transit={transit}
+                   user={user} isGuest={isGuest} isAdmin={isAdmin}
                    isDarkMode={isDarkMode} triggerToast={triggerToast} onSelectStation={setSelectedStation}
                    userAreas={activeUserAreas}
                  />
@@ -791,7 +848,7 @@ const HomeScreen = ({
                        <Search size={14} className="text-slate-400 shrink-0" />
                        <input 
                          type="text" 
-                         placeholder="فلتر قائمة المواقف بالاسم أو الخط..." 
+                         placeholder="ابحث باسم الموقف أو الخط أو اكتب (من كذا لكذا)..." 
                          value={stationSearchQuery}
                          onChange={(e) => setStationSearchQuery(e.target.value)}
                          className="w-full bg-transparent outline-none text-xs font-bold h-full"
@@ -807,6 +864,33 @@ const HomeScreen = ({
                        </button>
                      )}
                    </div>
+
+                   {/* لو المستخدم كتب مسار كامل (من ... إلى ...) جوه شريط بحث المواقف نعرضله النتيجة فوراً من محرك بيسو */}
+                   {smartSearchOutput?.kind === 'route' && smartSearchOutput.plan?.options?.length > 0 && (
+                     <div className="p-3 rounded-xl border border-indigo-500/40 bg-indigo-500/10 space-y-1.5 animate-fade-in-up">
+                       <div className="flex items-center justify-between">
+                         <span className="text-xs font-black text-indigo-600 dark:text-indigo-400">
+                           🧭 أفضل مسار محسوب لبحثك:
+                         </span>
+                         <span className="text-xs font-black text-emerald-600 bg-emerald-500/15 px-2 py-0.5 rounded-md">
+                           ⏱ ~{smartSearchOutput.plan.options[0].minutes} د • 💰 {smartSearchOutput.plan.options[0].fare} ج
+                         </span>
+                       </div>
+                       <p className={`text-xs font-bold ${textPrimary}`}>
+                         {[
+                           transit.engine.byId.get(smartSearchOutput.plan.options[0].edges[0].from)?.name,
+                           ...smartSearchOutput.plan.options[0].edges.map(e => transit.engine.byId.get(e.to)?.name)
+                         ].filter(Boolean).join(' ⬅️ ')}
+                       </p>
+                     </div>
+                   )}
+
+                   {/* عرض أي إرشاد معتمد من بيسو يطابق البحث */}
+                   {smartSearchOutput?.guides?.length > 0 && (
+                     <div className="p-2.5 rounded-xl border border-amber-500/40 bg-amber-500/10 text-xs font-bold text-amber-700 dark:text-amber-300">
+                       📌 <strong>إرشاد معتمد ({smartSearchOutput.guides[0].placeKeywords}):</strong> {smartSearchOutput.guides[0].correctedInfo}
+                     </div>
+                   )}
 
                    {showStationFilters && (
                    <div className="flex items-center justify-between gap-1.5 flex-wrap animate-fade-in-up">
@@ -856,6 +940,21 @@ const HomeScreen = ({
                    <div className={`text-center py-10 px-4 rounded-2xl border-2 border-dashed col-span-1 md:col-span-2 lg:col-span-3 ${isDarkMode ? 'border-slate-800 bg-slate-900/50' : 'border-slate-200 bg-slate-50'}`}>
                      <BusFront size={30} className="mx-auto text-slate-300 mb-2"/>
                      <h3 className="font-bold text-xs text-slate-500 mb-2">لا توجد مواقف مسجلة تطابق هذا البحث</h3>
+                     {smartSearchOutput?.suggestions?.length > 0 && (
+                       <div className="flex items-center justify-center gap-1.5 flex-wrap mb-3">
+                         <span className={`text-xs font-bold ${textSecondary}`}>هل تقصد:</span>
+                         {smartSearchOutput.suggestions.map(s => (
+                           <button
+                             key={s.id}
+                             type="button"
+                             onClick={() => setStationSearchQuery(s.name)}
+                             className="px-2.5 py-1 rounded-lg bg-indigo-500/15 text-indigo-500 text-xs font-black"
+                           >
+                             {s.name}
+                           </button>
+                         ))}
+                       </div>
+                     )}
                      {!isGuest && (
                        <button onClick={() => setShowAddStation(true)} className="px-3 py-1.5 bg-emerald-600 text-white rounded-xl text-xs font-black inline-flex items-center gap-1 shadow-sm">
                          <Plus size={13}/> أضف هذا الموقف
@@ -864,7 +963,7 @@ const HomeScreen = ({
                    </div>
                  ) : (
                    visibleStations.map(station => {
-                     const approvedRoutes = (station.routes || []).filter(r => isAdmin || r.status !== 'pending');
+                     const displayRoutes = getStationDisplayRoutes(station);
                      return (
                        <div key={station.id} onClick={() => setSelectedStation(station)} className={`p-3 rounded-2xl border shadow-sm hover:shadow-md cursor-pointer transition-all flex flex-col justify-between gap-2 ${bgCard} hover:border-indigo-500/60`}>
                          <div className="flex justify-between items-start gap-2">
@@ -884,20 +983,22 @@ const HomeScreen = ({
                              {station.crowdStatus === 'crowded' && <span className="text-xs bg-rose-500/15 text-rose-500 px-1.5 py-0.5 rounded font-black">🔴 زحمة</span>}
                              {station.crowdStatus === 'empty' && <span className="text-xs bg-emerald-500/15 text-emerald-500 px-1.5 py-0.5 rounded font-black">🟢 رايق</span>}
                              <span className="text-xs font-black text-indigo-500 bg-indigo-500/10 px-1.5 py-0.5 rounded">
-                               {approvedRoutes.length} خط
+                               {displayRoutes.length} خط
                              </span>
                            </div>
                          </div>
 
-                         {approvedRoutes.length > 0 ? (
+                         {displayRoutes.length > 0 ? (
                            <div className="flex flex-wrap gap-1 p-1.5 rounded-lg bg-slate-50 dark:bg-slate-800/60 border border-slate-100 dark:border-slate-800">
-                             {approvedRoutes.slice(0, 4).map((route, i) => (
+                             {displayRoutes.slice(0, 4).map((route, i) => (
                                <span key={i} className="inline-flex items-center gap-1 text-xs font-bold bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 px-1.5 py-0.5 rounded border border-slate-200/80 dark:border-slate-700">
-                                 <span className="truncate max-w-[90px]">{route.destinationDetails || route.destination}</span>
-                                 <strong className="text-emerald-500 font-black">{route.fare}ج</strong>
+                                 <span className="truncate max-w-[95px]">{route.title}</span>
+                                 {route.fare != null && route.fare !== '' && (
+                                   <strong className="text-emerald-500 font-black">{route.fare}ج</strong>
+                                 )}
                                </span>
                              ))}
-                             {approvedRoutes.length > 4 && <span className="text-xs font-black text-indigo-500 px-1">+{approvedRoutes.length - 4}</span>}
+                             {displayRoutes.length > 4 && <span className="text-xs font-black text-indigo-500 px-1">+{displayRoutes.length - 4}</span>}
                            </div>
                          ) : (
                            <div className="text-xs font-bold text-slate-400 bg-slate-50 dark:bg-slate-800/40 p-1.5 rounded-lg text-center border border-dashed dark:border-slate-800">
@@ -1094,7 +1195,7 @@ const HomeScreen = ({
                     <div>
                       <h4 className={`text-xs font-black ${textPrimary}`}>🚏 {selectedMapItem.data.name}</h4>
                       <p className="text-xs font-bold text-slate-400">
-                        {selectedMapItem.data.location} • {(selectedMapItem.data.routes || []).length} خطوط متاحة
+                        {selectedMapItem.data.location} • {getStationDisplayRoutes(selectedMapItem.data).length} خطوط متاحة
                       </p>
                     </div>
                     <button className="px-3 py-1.5 bg-indigo-600 text-white rounded-xl text-xs font-black">
@@ -1111,7 +1212,7 @@ const HomeScreen = ({
               <Navigation size={14} className="text-indigo-500" /> تصفح سريع حسب المنطقة:
             </h4>
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
-              {SUPPORTED_AREAS.map(area => {
+              {effectiveAreas.map(area => {
                 const count = areaTripCounts[area] || 0;
                 const isMyArea = activeUserAreas.includes(area);
                 return (
@@ -1140,10 +1241,12 @@ const HomeScreen = ({
         </div>
       )}
 
-      {/* نافذة المساعد الذكي بيسو */}
+      {/* نافذة المساعد الذكي بيسو (ممرر لها transit لمنع تكرار الاشتراكات) */}
       {showBesoModal && (
         <BesoAssistantModal
           stations={stations}
+          links={links}
+          transit={transit}
           isDarkMode={isDarkMode}
           onClose={() => setShowBesoModal(false)}
           onSelectStation={(st) => setSelectedStation(st)}
@@ -1184,7 +1287,7 @@ const HomeScreen = ({
                     {EGYPT_CITIES.map(c => <option key={`st_gov_${c}`} value={c}>محافظة {c}</option>)}
                   </optgroup>
                   <optgroup label="📍 المدن والمناطق الحيوية">
-                    {SUPPORTED_AREAS.map(c => <option key={`st_area_${c}`} value={c}>{c}</option>)}
+                    {effectiveAreas.map(c => <option key={`st_area_${c}`} value={c}>{c}</option>)}
                   </optgroup>
                 </select>
 

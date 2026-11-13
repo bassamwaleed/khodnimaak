@@ -1,19 +1,49 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import SuggestLinkModal from './SuggestLinkModal';
-import useBackClose from '../hooks/useBackClose';
+import { stationConnections } from './BesoAssistantModal';
 import { isApprovedLink } from '../utils/gis';
-import { LINK_KINDS } from '../utils/gisConstants';
-import { doc, getDoc, updateDoc, deleteDoc, collection, query, where, getDocs, writeBatch } from 'firebase/firestore';
-import { X, MapPinned, Route, Plus, Loader2, BusFront, Edit3, Check, AlertCircle, Trash2, Flame, UserCheck, Search, Settings, Compass, Link2 } from 'lucide-react';
+import { LINK_KINDS, SUPPORTED_AREAS, NODE_TYPES } from '../utils/gisConstants';
+import { doc, getDoc, updateDoc, collection, query, where, getDocs, writeBatch } from 'firebase/firestore';
+import { X, MapPinned, Route, Plus, Loader2, BusFront, Edit3, Check, AlertCircle, Trash2, Flame, UserCheck, Search, Settings, Compass, Link2, ChevronLeft } from 'lucide-react';
 import { db, STATIONS_COLLECTION, LINKS_COLLECTION } from '../firebase';
 import { EGYPT_CITIES } from '../utils/helpers';
-import { SUPPORTED_AREAS, NODE_TYPES } from '../utils/gisConstants';
 
-const StationModal = ({ station, stations = [], links = [], user, isAdmin, isGuest, isDarkMode, onClose, triggerToast }) => {
+// هوك داخلي لإغلاق النافذة عند الضغط على زر الرجوع في الموبايل دون الخروج من الموقع
+const useInternalBackClose = (isOpen, onClose) => {
+  useEffect(() => {
+    if (!isOpen || typeof window === 'undefined') return undefined;
+    const stateKey = `modal_${Date.now()}`;
+    window.history.pushState({ [stateKey]: true }, '');
+    const handlePopState = () => {
+      if (onClose) onClose();
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => {
+      window.removeEventListener('popstate', handlePopState);
+    };
+  }, [isOpen]);
+};
+
+const StationModal = ({
+  station,
+  stations = [],
+  links = [],
+  transit = null,
+  areas = SUPPORTED_AREAS,
+  user,
+  isAdmin,
+  isGuest,
+  isDarkMode,
+  onClose,
+  onSelectStation,
+  triggerToast
+}) => {
+  const effectiveAreas = Array.isArray(areas) && areas.length > 0 ? areas : SUPPORTED_AREAS;
+
   const [isAddingRoute, setIsAddingRoute] = useState(station.startInAddMode || false);
   const [newRouteDest, setNewRouteDest] = useState('');
   const [newRouteDetails, setNewRouteDetails] = useState(''); 
-  const [newRouteBoardingHint, setNewRouteBoardingHint] = useState(''); // مكان الركوب الدقيق (من فوق الكوبري / تحت المحور)
+  const [newRouteBoardingHint, setNewRouteBoardingHint] = useState('');
   const [newRouteFare, setNewRouteFare] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -27,7 +57,7 @@ const StationModal = ({ station, stations = [], links = [], user, isAdmin, isGue
   const [editStationGov, setEditStationGov] = useState(station.governorate || '');
   const [editStationLoc, setEditStationLoc] = useState(station.location || '');
   const [editStationUrl, setEditStationUrl] = useState(station.mapUrl || '');
-  const [editTransferHint, setEditTransferHint] = useState(station.transferHint || ''); // إرشاد التحويلة للنقطة التبادلية
+  const [editTransferHint, setEditTransferHint] = useState(station.transferHint || '');
   const [isSavingStationInfo, setIsSavingStationInfo] = useState(false);
 
   const bgCard = isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200';
@@ -36,14 +66,31 @@ const StationModal = ({ station, stations = [], links = [], user, isAdmin, isGue
   const bgInput = isDarkMode ? 'bg-slate-800 border-slate-700 text-white focus:border-indigo-500' : 'bg-white border-slate-200 text-slate-900 focus:border-indigo-500';
 
   const [showSuggestLink, setShowSuggestLink] = useState(false);
-  const stationLinks = links
-    .filter(l => isApprovedLink(l) && (l.fromId === station.id || l.toId === station.id))
-    .map(l => ({ link: l, other: stations.find(x => x.id === (l.fromId === station.id ? l.toId : l.fromId)) }))
-    .filter(x => x.other);
 
-  // زرار/سحبة الرجوع تقفل المودال بدل ما تخرج من الموقع
-  useBackClose(true, onClose);
-  useBackClose(showSuggestLink, () => setShowSuggestLink(false));
+  const allStationsList = useMemo(() => {
+    if (transit?.stations && transit.stations.length > 0) return transit.stations;
+    return stations;
+  }, [transit?.stations, stations]);
+
+  const allLinksList = useMemo(() => {
+    if (transit?.links && transit.links.length > 0) return transit.links;
+    return links;
+  }, [transit?.links, links]);
+
+  const stationLinks = useMemo(() => {
+    return allLinksList
+      .filter(l => isApprovedLink(l) && (l.fromId === station.id || l.toId === station.id))
+      .map(l => ({ link: l, other: allStationsList.find(x => x.id === (l.fromId === station.id ? l.toId : l.fromId)) }))
+      .filter(x => x.other);
+  }, [allLinksList, allStationsList, station.id]);
+
+  // استخراج الاتصالات الحية من محرك بيسو (تشمل الروابط المرسومة على الخريطة والخطوط المستنتجة)
+  const engineConnections = useMemo(() => {
+    if (!transit?.engine) return [];
+    return stationConnections(transit.engine, station.id);
+  }, [transit?.engine, station.id]);
+
+  useInternalBackClose(true, onClose);
 
   const currentTypeObj = NODE_TYPES.find(t => t.id === (station.nodeType || 'station')) || NODE_TYPES[0];
 
@@ -83,7 +130,6 @@ const StationModal = ({ station, stations = [], links = [], user, isAdmin, isGue
   const handleDeleteStation = async () => {
     if(!window.confirm('هل أنت متأكد من حذف هذه النقطة بالكامل؟')) return;
     try {
-      // احذف روابط التبادل المتصلة بالنقطة (من أو إلى) مع النقطة نفسها
       const batch = writeBatch(db);
       const [outLinks, inLinks] = await Promise.all([
         getDocs(query(collection(db, LINKS_COLLECTION), where('fromId', '==', station.id))),
@@ -201,10 +247,13 @@ const StationModal = ({ station, stations = [], links = [], user, isAdmin, isGue
     } catch (e) { triggerToast('حدث خطأ أثناء التعديل'); }
   };
 
+  const manualRoutesCount = (station.routes || []).length;
+  const totalAvailableCount = manualRoutesCount + engineConnections.length;
+
   return (
     <>
-    <div className="fixed inset-0 bg-slate-900/95 backdrop-blur-sm z-[400] flex justify-center items-end sm:items-center p-0 sm:p-4 pointer-events-auto">
-      <div className={`${bgCard} w-full sm:max-w-md h-[90vh] sm:h-[650px] rounded-t-[2rem] sm:rounded-3xl shadow-2xl flex flex-col overflow-hidden animate-fade-in-up border dark:border-slate-700`}>
+    <div className="fixed inset-0 bg-slate-900/95 backdrop-blur-sm z-[400] flex justify-center items-end sm:items-center p-0 sm:p-4 pointer-events-auto" onClick={onClose}>
+      <div onClick={e => e.stopPropagation()} className={`${bgCard} w-full sm:max-w-md h-[90vh] sm:h-[650px] rounded-t-[2rem] sm:rounded-3xl shadow-2xl flex flex-col overflow-hidden animate-fade-in-up border dark:border-slate-700`}>
         
         <div className="p-4 border-b flex flex-col bg-indigo-50/70 dark:bg-slate-800 dark:border-slate-700 shrink-0 relative">
           <div className="flex justify-between items-start w-full">
@@ -243,37 +292,11 @@ const StationModal = ({ station, stations = [], links = [], user, isAdmin, isGue
             </div>
           </div>
 
-          {/* عرض إرشاد التحويلة/التبديل للراكب إن وجد */}
           {station.transferHint && (
             <div className="mt-2.5 p-2 rounded-xl bg-indigo-500/10 border border-indigo-500/25 text-xs font-bold text-indigo-700 dark:text-indigo-300 flex items-start gap-1.5">
               <Compass size={14} className="shrink-0 mt-0.5 text-indigo-500" />
               <span><strong>إرشاد التبديل والركوب:</strong> {station.transferHint}</span>
             </div>
-          )}
-
-          {stationLinks.length > 0 && (
-            <div className="mt-2.5 space-y-1.5">
-              <span className="text-xs font-black text-slate-500 block">🔄 روابط التبادل ({stationLinks.length})</span>
-              {stationLinks.map(({ link, other }) => {
-                const k = LINK_KINDS.find(x => x.id === link.kind) || LINK_KINDS[1];
-                return (
-                  <div key={link.id} className="p-2.5 rounded-xl border bg-white dark:bg-slate-900 dark:border-slate-700 flex items-center justify-between gap-2">
-                    <span className="text-xs font-black truncate text-slate-800 dark:text-slate-100">{link.oneWay ? (link.fromId === station.id ? '← ' : '→ ') : ''}{other.name}</span>
-                    <span className="flex items-center gap-1.5 shrink-0">
-                      <span className={`text-xs font-black px-2 py-0.5 rounded-lg border ${k.badgeClass}`}>{k.short}</span>
-                      {link.kind === 'ride' && <span className="text-xs font-black text-emerald-600">{link.fare} ج</span>}
-                      {link.minutes ? <span className="text-xs font-bold text-slate-500">{link.minutes} د</span> : null}
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-          {user && !isGuest && (
-            <button type="button" onClick={() => setShowSuggestLink(true)}
-              className="mt-2.5 w-full min-h-11 rounded-xl text-xs font-black border border-indigo-500/40 text-indigo-600 dark:text-indigo-400 flex items-center justify-center gap-1.5">
-              <Link2 size={14} /> اقترح ربط {station.name} بنقطة تانية
-            </button>
           )}
 
           <div className="mt-2.5 flex items-center justify-between bg-white dark:bg-slate-900 p-2 rounded-xl shadow-sm border dark:border-slate-700">
@@ -288,10 +311,10 @@ const StationModal = ({ station, stations = [], links = [], user, isAdmin, isGue
           </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-4 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
+        <div className="flex-1 overflow-y-auto p-4 space-y-4 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
           
           {isAdmin && isEditingStation && (
-            <div className="mb-4 p-3.5 rounded-2xl border border-amber-300 dark:border-amber-700 bg-amber-50/50 dark:bg-amber-900/10 space-y-2.5 animate-fade-in-up">
+            <div className="p-3.5 rounded-2xl border border-amber-300 dark:border-amber-700 bg-amber-50/50 dark:bg-amber-900/10 space-y-2.5 animate-fade-in-up">
               <span className="text-xs font-black text-amber-600 flex items-center gap-1.5 mb-1"><Settings size={14}/> تعديل بيانات النقطة وإرشاد التبديل (أدمن)</span>
               
               <div className="grid grid-cols-2 gap-1.5">
@@ -315,7 +338,7 @@ const StationModal = ({ station, stations = [], links = [], user, isAdmin, isGue
               <select value={editStationLoc} onChange={e => setEditStationLoc(e.target.value)} className={`w-full p-2.5 rounded-xl border text-xs font-bold outline-none ${bgInput}`}>
                 <option value="">تعديل المنطقة / المحافظة...</option>
                 <optgroup label="📍 المدن والمناطق الحيوية">
-                  {SUPPORTED_AREAS.map(a => <option key={a} value={a}>{a}</option>)}
+                  {effectiveAreas.map(a => <option key={a} value={a}>{a}</option>)}
                 </optgroup>
                 <optgroup label="🏛️ محافظات مصر">
                   {EGYPT_CITIES.map(c => <option key={c} value={c}>{c}</option>)}
@@ -341,181 +364,267 @@ const StationModal = ({ station, stations = [], links = [], user, isAdmin, isGue
             </div>
           )}
 
-          <div className="flex justify-between items-center mb-3">
-            <h3 className={`font-black text-sm sm:text-base ${textPrimary}`}>
-              الخطوط والمواصلات المارة ({station.routes?.length || 0})
-            </h3>
-            {!isAddingRoute && (
-              <button onClick={() => setIsAddingRoute(true)} className="text-xs font-black bg-indigo-600 text-white px-3 py-1.5 rounded-xl flex items-center gap-1 hover:bg-indigo-700 transition-colors shadow-sm">
-                <Plus size={13}/> أضف خط / تحويلة
-              </button>
-            )}
-          </div>
+          {/* 1) قسم المسارات المربوطة على خريطة الـ GIS (تظهر فوراً حتى لو لم يضف المستخدم routes يدوية) */}
+          {(stationLinks.length > 0 || engineConnections.length > 0) && (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-black text-indigo-600 dark:text-indigo-400 flex items-center gap-1.5">
+                  <Link2 size={14} /> مواصلات مربوطة مباشرة على الخريطة ({Math.max(stationLinks.length, engineConnections.length)})
+                </span>
+                {user && !isGuest && (
+                  <button
+                    type="button"
+                    onClick={() => setShowSuggestLink(true)}
+                    className="text-xs font-black text-indigo-500 hover:underline"
+                  >
+                    + اقترح ربط جديد
+                  </button>
+                )}
+              </div>
 
-          {!isAddingRoute && (station.routes?.length || 0) > 2 && (
-            <div className={`flex items-center gap-2 px-3 py-2 mb-3 rounded-xl border ${bgInput}`}>
-              <Search size={15} className="text-slate-400 shrink-0" />
-              <input 
-                type="text" 
-                placeholder="ابحث داخل الخطوط (مثال: الحصري، رمسيس، أكتوبر...)" 
-                value={routeSearchQuery}
-                onChange={(e) => setRouteSearchQuery(e.target.value)}
-                className="w-full bg-transparent outline-none text-xs font-bold"
-              />
-              {routeSearchQuery && <button onClick={() => setRouteSearchQuery('')}><X size={14} className="text-slate-400 hover:text-rose-500"/></button>}
+              <div className="space-y-1.5">
+                {stationLinks.length > 0 ? stationLinks.map(({ link, other }) => {
+                  const k = LINK_KINDS.find(x => x.id === link.kind) || LINK_KINDS[1];
+                  return (
+                    <div
+                      key={link.id}
+                      onClick={() => onSelectStation && onSelectStation(other)}
+                      className={`p-2.5 rounded-xl border flex flex-col gap-1 transition-colors ${onSelectStation ? 'cursor-pointer hover:border-indigo-500' : ''} ${bgCard}`}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className={`text-xs sm:text-sm font-black truncate ${textPrimary}`}>
+                          {link.oneWay ? (link.fromId === station.id ? '⬅️ ' : '➡️ ') : '⇄ '}
+                          {other.name}
+                          <span className={`text-xs font-bold ms-1 ${textSecondary}`}>({other.location})</span>
+                        </span>
+                        <span className="flex items-center gap-1.5 shrink-0">
+                          <span className={`text-xs font-black px-2 py-0.5 rounded-lg border ${k.badgeClass}`}>{k.short}</span>
+                          {link.kind === 'ride' && link.fare != null && (
+                            <span className="text-xs font-black text-emerald-600 bg-emerald-500/10 px-2 py-0.5 rounded-lg">{link.fare} ج</span>
+                          )}
+                          {link.minutes ? <span className="text-xs font-bold text-slate-400">~{link.minutes} د</span> : null}
+                        </span>
+                      </div>
+                      {link.note && (
+                        <p className={`text-xs font-bold ${textSecondary}`}>📍 {link.note}</p>
+                      )}
+                    </div>
+                  );
+                }) : engineConnections.map((conn, idx) => (
+                  <div
+                    key={conn.station.id || idx}
+                    onClick={() => onSelectStation && onSelectStation(conn.station)}
+                    className={`p-2.5 rounded-xl border flex items-center justify-between gap-2 ${onSelectStation ? 'cursor-pointer hover:border-indigo-500' : ''} ${bgCard}`}
+                  >
+                    <div className="min-w-0">
+                      <p className={`text-xs sm:text-sm font-black truncate ${textPrimary}`}>
+                        🚐 {conn.station.name} <span className={`text-xs font-bold ${textSecondary}`}>({conn.station.location})</span>
+                      </p>
+                      {(conn.boarding || conn.note) && (
+                        <p className={`text-xs font-bold truncate ${textSecondary}`}>📍 {conn.boarding || conn.note}</p>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      {conn.fare != null && (
+                        <span className="text-xs font-black text-emerald-600 bg-emerald-500/10 px-2 py-0.5 rounded-lg">{conn.fare} ج</span>
+                      )}
+                      <ChevronLeft size={14} className="text-slate-400" />
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
 
-          {isAddingRoute && (
-            <form onSubmit={handleAddRoute} className="mb-4 p-3.5 bg-indigo-50/50 dark:bg-slate-800/80 rounded-2xl border border-indigo-200 dark:border-slate-700 animate-fade-in-up space-y-2.5">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-black text-indigo-600 dark:text-indigo-400 flex items-center gap-1">
-                  <Route size={14}/> إضافة خط يمر بـ {station.name}
-                </span>
-                <button type="button" onClick={() => setIsAddingRoute(false)} className="text-slate-400 hover:text-rose-500"><X size={16}/></button>
-              </div>
-
-              <div className="space-y-2">
-                <select required value={newRouteDest} onChange={e => setNewRouteDest(e.target.value)} className={`w-full p-2.5 rounded-xl border text-xs font-bold outline-none ${bgInput}`}>
-                  <option value="" disabled>1. اختر المنطقة أو المحافظة المتجه إليها *</option>
-                  <optgroup label="📍 المدن والمناطق الحيوية">
-                    {SUPPORTED_AREAS.map(a => <option key={`area_${a}`} value={a}>{a}</option>)}
-                  </optgroup>
-                  <optgroup label="🏛️ محافظات مصر (27 محافظة)">
-                    {EGYPT_CITIES.map(c => <option key={`gov_${c}`} value={c}>محافظة {c}</option>)}
-                  </optgroup>
-                </select>
-
-                <input 
-                  type="text" 
-                  placeholder="2. اسم الخط أو النقطة التبادلية (مثال: الحصري / محور 26 يوليو)" 
-                  value={newRouteDetails} 
-                  onChange={e => setNewRouteDetails(e.target.value)} 
-                  className={`w-full p-2.5 rounded-xl border text-xs font-bold outline-none ${bgInput}`}
-                />
-
-                <input 
-                  type="text" 
-                  placeholder="3. يركب منين بالظبط؟ (مثال: من فوق المحور / اتجاه ميدان لبنان)" 
-                  value={newRouteBoardingHint} 
-                  onChange={e => setNewRouteBoardingHint(e.target.value)} 
-                  className={`w-full p-2.5 rounded-xl border text-xs font-bold outline-none ${bgInput}`}
-                />
-
-                <input 
-                  type="number" 
-                  required 
-                  placeholder="4. الأجرة للفرد (جنيه) *" 
-                  value={newRouteFare} 
-                  onChange={e => setNewRouteFare(e.target.value)} 
-                  className={`w-full p-2.5 rounded-xl border text-xs font-bold outline-none ${bgInput}`}
-                />
-
-                <div className="flex gap-2 pt-1">
-                  <button type="submit" disabled={isSubmitting} className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white py-2.5 rounded-xl text-xs font-black flex justify-center items-center gap-2 shadow-sm">
-                    {isSubmitting ? <Loader2 size={14} className="animate-spin"/> : (isAdmin ? 'حفظ وتغذية بيسو ✅' : 'إرسال للاعتماد 🚀')}
+          {/* 2) قسم الخطوط التفصيلية داخل الموقف */}
+          <div>
+            <div className="flex justify-between items-center mb-2.5">
+              <h3 className={`font-black text-xs sm:text-sm ${textPrimary}`}>
+                الخطوط الداخلية المسجلة ({manualRoutesCount})
+              </h3>
+              <div className="flex items-center gap-1.5">
+                {user && !isGuest && stationLinks.length === 0 && engineConnections.length === 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setShowSuggestLink(true)}
+                    className="text-xs font-black px-2.5 py-1.5 rounded-xl border border-indigo-500/40 text-indigo-600 dark:text-indigo-400 flex items-center gap-1"
+                  >
+                    <Link2 size={12} /> ربط بنقطة
                   </button>
-                  <button type="button" onClick={() => setIsAddingRoute(false)} className="px-4 bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-xl text-xs font-bold">إلغاء</button>
+                )}
+                {!isAddingRoute && (
+                  <button onClick={() => setIsAddingRoute(true)} className="text-xs font-black bg-indigo-600 text-white px-3 py-1.5 rounded-xl flex items-center gap-1 hover:bg-indigo-700 transition-colors shadow-sm">
+                    <Plus size={13}/> أضف خط
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {!isAddingRoute && manualRoutesCount > 2 && (
+              <div className={`flex items-center gap-2 px-3 py-2 mb-3 rounded-xl border ${bgInput}`}>
+                <Search size={15} className="text-slate-400 shrink-0" />
+                <input 
+                  type="text" 
+                  placeholder="ابحث داخل الخطوط (مثال: الحصري، رمسيس، أكتوبر...)" 
+                  value={routeSearchQuery}
+                  onChange={(e) => setRouteSearchQuery(e.target.value)}
+                  className="w-full bg-transparent outline-none text-xs font-bold"
+                />
+                {routeSearchQuery && <button onClick={() => setRouteSearchQuery('')}><X size={14} className="text-slate-400 hover:text-rose-500"/></button>}
+              </div>
+            )}
+
+            {isAddingRoute && (
+              <form onSubmit={handleAddRoute} className="mb-4 p-3.5 bg-indigo-50/50 dark:bg-slate-800/80 rounded-2xl border border-indigo-200 dark:border-slate-700 animate-fade-in-up space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-black text-indigo-600 dark:text-indigo-400 flex items-center gap-1">
+                    <Route size={14}/> إضافة خط يمر بـ {station.name}
+                  </span>
+                  <button type="button" onClick={() => setIsAddingRoute(false)} className="text-slate-400 hover:text-rose-500"><X size={16}/></button>
                 </div>
-              </div>
-            </form>
-          )}
 
-          <div className="space-y-2.5 pb-6">
-            {(!station.routes || station.routes.length === 0) ? (
-              <div className="text-center py-10 opacity-60 border-2 border-dashed rounded-2xl border-slate-200 dark:border-slate-800">
-                <Route size={30} className="mx-auto mb-2 text-slate-400"/>
-                <p className="font-bold text-xs">لا توجد خطوط مسجلة في هذه النقطة بعد.</p>
-                <button onClick={() => setIsAddingRoute(true)} className="mt-2 text-xs font-black text-indigo-500 hover:underline">
-                  + أضف أول خط سير الآن
-                </button>
-              </div>
-            ) : (
-              station.routes.map((route, originalIndex) => {
-                if (!isAdmin && route.status === 'pending' && !(route.addedBy && user && route.addedBy.includes(user.uid))) return null;
-                
-                if (routeSearchQuery.trim() !== '') {
-                  const query = routeSearchQuery.toLowerCase().trim();
-                  const destMatch = route.destination?.toLowerCase().includes(query);
-                  const detailMatch = route.destinationDetails?.toLowerCase().includes(query);
-                  if (!destMatch && !detailMatch) return null;
-                }
-                
-                const displayTitle = route.destinationDetails || route.destination;
-                const displaySubTitle = route.destinationDetails ? route.destination : '';
+                <div className="space-y-2">
+                  <select required value={newRouteDest} onChange={e => setNewRouteDest(e.target.value)} className={`w-full p-2.5 rounded-xl border text-xs font-bold outline-none ${bgInput}`}>
+                    <option value="" disabled>1. اختر المنطقة أو المحافظة المتجه إليها *</option>
+                    <optgroup label="📍 المدن والمناطق الحيوية">
+                      {effectiveAreas.map(a => <option key={`area_${a}`} value={a}>{a}</option>)}
+                    </optgroup>
+                    <optgroup label="🏛️ محافظات مصر (27 محافظة)">
+                      {EGYPT_CITIES.map(c => <option key={`gov_${c}`} value={c}>محافظة {c}</option>)}
+                    </optgroup>
+                  </select>
 
-                return (
-                  <div key={originalIndex} className={`flex items-center justify-between p-3 rounded-2xl border shadow-sm transition-colors ${bgCard} ${route.status === 'pending' ? 'border-amber-300 bg-amber-50/20 dark:border-amber-800/60' : ''}`}>
-                    <div className="flex items-center gap-2.5 min-w-0">
-                      <div className="w-9 h-9 rounded-xl bg-indigo-500/10 text-indigo-500 flex items-center justify-center shrink-0">
-                        <Route size={16}/>
-                      </div>
-                      <div className="flex flex-col min-w-0">
-                        <div className="flex items-center gap-1.5 flex-wrap">
-                          <h4 className={`font-black text-xs sm:text-sm truncate ${textPrimary}`}>{displayTitle}</h4>
-                          {displaySubTitle && (
-                            <span className="text-xs font-bold bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 px-1.5 py-0.5 rounded-md">
-                              {displaySubTitle}
-                            </span>
-                          )}
+                  <input 
+                    type="text" 
+                    placeholder="2. اسم الخط أو النقطة التبادلية (مثال: الحصري / محور 26 يوليو)" 
+                    value={newRouteDetails} 
+                    onChange={e => setNewRouteDetails(e.target.value)} 
+                    className={`w-full p-2.5 rounded-xl border text-xs font-bold outline-none ${bgInput}`}
+                  />
+
+                  <input 
+                    type="text" 
+                    placeholder="3. يركب منين بالظبط؟ (مثال: من فوق المحور / اتجاه ميدان لبنان)" 
+                    value={newRouteBoardingHint} 
+                    onChange={e => setNewRouteBoardingHint(e.target.value)} 
+                    className={`w-full p-2.5 rounded-xl border text-xs font-bold outline-none ${bgInput}`}
+                  />
+
+                  <input 
+                    type="number" 
+                    required 
+                    placeholder="4. الأجرة للفرد (جنيه) *" 
+                    value={newRouteFare} 
+                    onChange={e => setNewRouteFare(e.target.value)} 
+                    className={`w-full p-2.5 rounded-xl border text-xs font-bold outline-none ${bgInput}`}
+                  />
+
+                  <div className="flex gap-2 pt-1">
+                    <button type="submit" disabled={isSubmitting} className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white py-2.5 rounded-xl text-xs font-black flex justify-center items-center gap-2 shadow-sm">
+                      {isSubmitting ? <Loader2 size={14} className="animate-spin"/> : (isAdmin ? 'حفظ وتغذية بيسو ✅' : 'إرسال للاعتماد 🚀')}
+                    </button>
+                    <button type="button" onClick={() => setIsAddingRoute(false)} className="px-4 bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-xl text-xs font-bold">إلغاء</button>
+                  </div>
+                </div>
+              </form>
+            )}
+
+            <div className="space-y-2.5 pb-6">
+              {totalAvailableCount === 0 ? (
+                <div className="text-center py-8 opacity-60 border-2 border-dashed rounded-2xl border-slate-200 dark:border-slate-800">
+                  <Route size={28} className="mx-auto mb-2 text-slate-400"/>
+                  <p className="font-bold text-xs">لا توجد خطوط مسجلة في هذه النقطة بعد.</p>
+                  <button onClick={() => setIsAddingRoute(true)} className="mt-2 text-xs font-black text-indigo-500 hover:underline">
+                    + أضف أول خط سير الآن
+                  </button>
+                </div>
+              ) : (
+                (station.routes || []).map((route, originalIndex) => {
+                  if (!isAdmin && route.status === 'pending' && !(route.addedBy && user && route.addedBy.includes(user.uid))) return null;
+                  
+                  if (routeSearchQuery.trim() !== '') {
+                    const q = routeSearchQuery.toLowerCase().trim();
+                    const destMatch = route.destination?.toLowerCase().includes(q);
+                    const detailMatch = route.destinationDetails?.toLowerCase().includes(q);
+                    if (!destMatch && !detailMatch) return null;
+                  }
+                  
+                  const displayTitle = route.destinationDetails || route.destination;
+                  const displaySubTitle = route.destinationDetails ? route.destination : '';
+
+                  return (
+                    <div key={originalIndex} className={`flex items-center justify-between p-3 rounded-2xl border shadow-sm transition-colors ${bgCard} ${route.status === 'pending' ? 'border-amber-300 bg-amber-50/20 dark:border-amber-800/60' : ''}`}>
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <div className="w-9 h-9 rounded-xl bg-indigo-500/10 text-indigo-500 flex items-center justify-center shrink-0">
+                          <Route size={16}/>
                         </div>
-
-                        {route.boardingHint && (
-                          <p className="text-xs font-bold text-indigo-500 dark:text-indigo-400 mt-0.5">
-                            📍 يركب من: {route.boardingHint}
-                          </p>
-                        )}
-                        
-                        <div className="flex items-center gap-2 mt-1">
-                          <div className="flex gap-1">
-                            <button onClick={() => handleUpdateCrowdStatus('route', 'empty', originalIndex)} className={`text-xs font-bold px-1.5 py-0.5 rounded transition-colors ${route.crowdStatus === 'empty' ? 'bg-emerald-500 text-white' : 'bg-slate-100 text-slate-500 dark:bg-slate-800'}`}>رايق</button>
-                            <button onClick={() => handleUpdateCrowdStatus('route', 'crowded', originalIndex)} className={`text-xs font-bold px-1.5 py-0.5 rounded transition-colors ${route.crowdStatus === 'crowded' ? 'bg-rose-500 text-white' : 'bg-slate-100 text-slate-500 dark:bg-slate-800'}`}>زحمة</button>
+                        <div className="flex flex-col min-w-0">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <h4 className={`font-black text-xs sm:text-sm truncate ${textPrimary}`}>{displayTitle}</h4>
+                            {displaySubTitle && (
+                              <span className="text-xs font-bold bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 px-1.5 py-0.5 rounded-md">
+                                {displaySubTitle}
+                              </span>
+                            )}
                           </div>
 
-                          {route.status === 'pending' ? (
-                            <span className="text-xs font-bold text-amber-500 flex items-center gap-0.5"><AlertCircle size={10}/> مراجعة</span>
-                          ) : route.crowdUpdatedAt ? (
-                            <span className="text-xs font-bold text-slate-400">{getTimeAgo(route.crowdUpdatedAt)}</span>
-                          ) : null}
+                          {route.boardingHint && (
+                            <p className="text-xs font-bold text-indigo-500 dark:text-indigo-400 mt-0.5">
+                              📍 يركب من: {route.boardingHint}
+                            </p>
+                          )}
+                          
+                          <div className="flex items-center gap-2 mt-1">
+                            <div className="flex gap-1">
+                              <button onClick={() => handleUpdateCrowdStatus('route', 'empty', originalIndex)} className={`text-xs font-bold px-1.5 py-0.5 rounded transition-colors ${route.crowdStatus === 'empty' ? 'bg-emerald-500 text-white' : 'bg-slate-100 text-slate-500 dark:bg-slate-800'}`}>رايق</button>
+                              <button onClick={() => handleUpdateCrowdStatus('route', 'crowded', originalIndex)} className={`text-xs font-bold px-1.5 py-0.5 rounded transition-colors ${route.crowdStatus === 'crowded' ? 'bg-rose-500 text-white' : 'bg-slate-100 text-slate-500 dark:bg-slate-800'}`}>زحمة</button>
+                            </div>
+
+                            {route.status === 'pending' ? (
+                              <span className="text-xs font-bold text-amber-500 flex items-center gap-0.5"><AlertCircle size={10}/> مراجعة</span>
+                            ) : route.crowdUpdatedAt ? (
+                              <span className="text-xs font-bold text-slate-400">{getTimeAgo(route.crowdUpdatedAt)}</span>
+                            ) : null}
+                          </div>
                         </div>
                       </div>
+                      
+                      <div className="flex flex-col items-end gap-1 shrink-0">
+                        {editingIndex === originalIndex ? (
+                          <div className="flex items-center gap-1">
+                             <input type="number" autoFocus placeholder="الأجرة" value={editFareValue} onChange={(e) => setEditFareValue(e.target.value)} className={`w-14 p-1 text-center rounded-md border text-xs font-bold ${bgInput}`} />
+                             <button onClick={() => handleSaveEditFare(originalIndex)} className="p-1 bg-emerald-500 text-white rounded hover:bg-emerald-600"><Check size={12}/></button>
+                             <button aria-label="إغلاق" onClick={() => setEditingIndex(-1)} className="p-1 bg-rose-500 text-white rounded hover:bg-rose-600"><X size={12}/></button>
+                          </div>
+                        ) : (
+                          <div className="flex items-center gap-1.5">
+                            <span className="font-black text-emerald-600 dark:text-emerald-400 text-xs sm:text-sm bg-emerald-500/10 px-2.5 py-1 rounded-xl border border-emerald-500/20">
+                              {route.fare} ج
+                            </span>
+                            {!isGuest && (
+                              <button onClick={() => {setEditingIndex(originalIndex); setEditFareValue(route.fare);}} className="text-slate-400 hover:text-indigo-500 p-1 bg-slate-100 dark:bg-slate-800 rounded-lg transition-colors" title="تعديل الأجرة"><Edit3 size={12}/></button>
+                            )}
+                            {isAdmin && (
+                              <button onClick={() => handleDeleteRoute(originalIndex)} className="text-rose-400 hover:text-rose-600 p-1 bg-rose-50 dark:bg-rose-900/20 rounded-lg transition-colors" title="حذف الخط"><Trash2 size={12}/></button>
+                            )}
+                          </div>
+                        )}
+                        {route.editRequest?.suggestedBy === user?.uid && !isAdmin && (
+                          <span className="text-xs text-amber-500 font-bold">اقتراحك ({route.editRequest.proposedFare}ج) قيد المراجعة</span>
+                        )}
+                      </div>
                     </div>
-                    
-                    <div className="flex flex-col items-end gap-1 shrink-0">
-                      {editingIndex === originalIndex ? (
-                        <div className="flex items-center gap-1">
-                           <input type="number" autoFocus placeholder="الأجرة" value={editFareValue} onChange={(e) => setEditFareValue(e.target.value)} className={`w-14 p-1 text-center rounded-md border text-xs font-bold ${bgInput}`} />
-                           <button onClick={() => handleSaveEditFare(originalIndex)} className="p-1 bg-emerald-500 text-white rounded hover:bg-emerald-600"><Check size={12}/></button>
-                           <button aria-label="إغلاق" onClick={() => setEditingIndex(-1)} className="p-2.5 bg-rose-500 text-white rounded hover:bg-rose-600"><X size={12}/></button>
-                        </div>
-                      ) : (
-                        <div className="flex items-center gap-1.5">
-                          <span className="font-black text-emerald-600 dark:text-emerald-400 text-xs sm:text-sm bg-emerald-500/10 px-2.5 py-1 rounded-xl border border-emerald-500/20">
-                            {route.fare} ج
-                          </span>
-                          {!isGuest && (
-                            <button onClick={() => {setEditingIndex(originalIndex); setEditFareValue(route.fare);}} className="text-slate-400 hover:text-indigo-500 p-1 bg-slate-100 dark:bg-slate-800 rounded-lg transition-colors" title="تعديل الأجرة"><Edit3 size={12}/></button>
-                          )}
-                          {isAdmin && (
-                            <button onClick={() => handleDeleteRoute(originalIndex)} className="text-rose-400 hover:text-rose-600 p-1 bg-rose-50 dark:bg-rose-900/20 rounded-lg transition-colors" title="حذف الخط"><Trash2 size={12}/></button>
-                          )}
-                        </div>
-                      )}
-                      {route.editRequest?.suggestedBy === user?.uid && !isAdmin && (
-                        <span className="text-xs text-amber-500 font-bold">اقتراحك ({route.editRequest.proposedFare}ج) قيد المراجعة</span>
-                      )}
-                    </div>
-                  </div>
-                );
-              })
-            )}
+                  );
+                })
+              )}
+            </div>
           </div>
 
         </div>
       </div>
     </div>
     {showSuggestLink && (
-      <SuggestLinkModal user={user} stations={stations} links={links} initialFromId={station.id}
+      <SuggestLinkModal user={user} stations={allStationsList} links={allLinksList} initialFromId={station.id}
         isDarkMode={isDarkMode} triggerToast={triggerToast} onClose={() => setShowSuggestLink(false)} />
     )}
     </>
