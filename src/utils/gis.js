@@ -27,14 +27,27 @@ export const estimateMinutes = (kind, distKm) => {
   return Math.max(1, Math.round(distKm * (MIN_PER_KM[kind] ?? 2)));
 };
 
-export const linkMinutes = (link, nodesById) => {
+// السعر: null/فاضي = غير معروف (مش صفر). المشي والتبديل سعرهم 0 فعلاً.
+export const parseFare = (v) => {
+  if (v === null || v === undefined || v === '') return null;
+  const n = Number(v);
+  return Number.isFinite(n) && n >= 0 ? n : null;
+};
+
+// الوقت: { minutes, estimated }. minutes = null لو مفيش وقت مسجل ولا مسافة نقدّر منها.
+export const linkMinutesInfo = (link, nodesById) => {
   const m = Number(link.minutes);
-  if (Number.isFinite(m) && m > 0) return m;
+  if (link.minutes !== null && link.minutes !== undefined && link.minutes !== '' && Number.isFinite(m) && m > 0) {
+    return { minutes: m, estimated: false };
+  }
   // المسافة الحالية من الإحداثيات (لو اتنقلت نقطة) وإلا المسافة المخزّنة
   const d = distanceBetween(nodesById[link.fromId], nodesById[link.toId])
     ?? (Number.isFinite(Number(link.distanceKm)) ? Number(link.distanceKm) : null);
-  return estimateMinutes(link.kind, d) ?? 0;
+  const est = estimateMinutes(link.kind, d);
+  return est == null ? { minutes: null, estimated: false } : { minutes: est, estimated: true };
 };
+
+export const linkMinutes = (link, nodesById) => linkMinutesInfo(link, nodesById).minutes;
 
 // الروابط القديمة (من غير status) تعتبر معتمدة. اقتراحات المستخدمين بتبدأ pending.
 export const isApprovedLink = (l) => !l.status || l.status === 'approved';
@@ -49,13 +62,16 @@ export const approvedLinks = (links, nodesById) => validLinks(links, nodesById).
 export function buildAdjacency(links, nodesById) {
   const adj = {};
   const push = (from, to, link) => {
+    const info = linkMinutesInfo(link, nodesById);
     (adj[from] = adj[from] || []).push({
       to, link,
-      minutes: linkMinutes(link, nodesById),
-      fare: Number(link.fare) || 0
+      minutes: info.minutes,            // null = غير معروف
+      minutesEstimated: info.estimated, // تقدير من المسافة مش وقت مسجل
+      fare: link.kind === 'ride' ? parseFare(link.fare) : 0 // null = غير معروف
     });
   };
-  approvedLinks(links, nodesById).forEach(l => {
+  // وصلات TfC (routeId) بتتحسب بالـpatterns بس: الـhop الواحد مش ركوبة ومفيهوش سعر
+  approvedLinks(links, nodesById).filter(l => !l.routeId).forEach(l => {
     push(l.fromId, l.toId, l);
     if (!l.oneWay) push(l.toId, l.fromId, l);
   });
@@ -71,10 +87,16 @@ export function findBestPath(links, nodesById, fromId, toId, criterion = 'fast')
   if (!nodesById[fromId] || !nodesById[toId]) return null;
   const adj = buildAdjacency(links, nodesById);
 
-  const cost = (e) =>
-    criterion === 'cheap'
-      ? e.fare + e.minutes * 0.02
-      : e.minutes + (e.link.kind === 'ride' ? BOARDING_PENALTY_MIN : 0);
+  // القيم دي للترتيب بين المسارات فقط — مش بتتجمع في الأسعار والأوقات المعروضة
+  const ORDER_FARE_IF_UNKNOWN = 10;
+  const ORDER_MINUTES_IF_UNKNOWN = 15;
+  const cost = (e) => {
+    const f = e.fare ?? ORDER_FARE_IF_UNKNOWN;
+    const m = e.minutes ?? ORDER_MINUTES_IF_UNKNOWN;
+    return criterion === 'cheap'
+      ? f + m * 0.02
+      : m + (e.link.kind === 'ride' ? BOARDING_PENALTY_MIN : 0);
+  };
 
   const dist = { [fromId]: 0 };
   const prev = {};
@@ -102,14 +124,18 @@ export function findBestPath(links, nodesById, fromId, toId, criterion = 'fast')
   const legs = [];
   for (let cur = toId; cur !== fromId; cur = prev[cur].from) {
     const { from, edge } = prev[cur];
-    legs.unshift({ fromId: from, toId: cur, link: edge.link, minutes: edge.minutes, fare: edge.fare });
+    legs.unshift({ fromId: from, toId: cur, link: edge.link, minutes: edge.minutes, minutesEstimated: edge.minutesEstimated, fare: edge.fare });
   }
   const rides = legs.filter(l => l.link.kind === 'ride').length;
   return {
     nodeIds: [fromId, ...legs.map(l => l.toId)],
     legs,
-    totalMinutes: legs.reduce((s, l) => s + l.minutes, 0),
-    totalFare: legs.reduce((s, l) => s + l.fare, 0),
+    // المجموع للقيم المعروفة فقط. العدّادات بتقول كام جزء ناقص أو تقديري.
+    totalMinutes: legs.reduce((s, l) => s + (l.minutes ?? 0), 0),
+    totalFare: legs.reduce((s, l) => s + (l.fare ?? 0), 0),
+    unknownFareLegs: legs.filter(l => l.fare == null).length,
+    unknownMinutesLegs: legs.filter(l => l.minutes == null).length,
+    estimatedMinutesLegs: legs.filter(l => l.minutesEstimated).length,
     rides,
     transfers: Math.max(0, rides - 1)
   };

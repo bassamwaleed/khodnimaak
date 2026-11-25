@@ -6,6 +6,7 @@ import {
   X, ShieldCheck, Users, BusFront, Settings, Search, CheckCircle2, 
   XCircle, Ban, Award, Crown, Eye, Plus, Trash2, Check, Loader2, Lock, MessageSquareOff, Car, Activity, Gift, MapPinned, MapPin, Route, Navigation 
 } from 'lucide-react';
+import { gateDocs, useActiveImport } from '../utils/importGate';
 import { db, USERS_COLLECTION, APP_COLLECTION_NAME, STATIONS_COLLECTION, LINKS_COLLECTION } from '../firebase';
 import VerificationImage from './VerificationImage';
 import VerificationMigration from './VerificationMigration';
@@ -217,6 +218,8 @@ const AdminPanel = ({ isDarkMode, onClose, triggerToast, appSettings, user, open
   const textSecondary = isDarkMode ? 'text-slate-400' : 'text-slate-500';
   const bgInput = isDarkMode ? 'bg-slate-800 border-slate-700 text-white' : 'bg-slate-50 border-slate-200 text-slate-900';
 
+  const activeImport = useActiveImport();
+
   useEffect(() => {
     const unsubUsers = onSnapshot(collection(db, USERS_COLLECTION), (snap) => {
       const list = snap.docs.map(d => ({ id: d.id, ...d.data() }));
@@ -227,7 +230,7 @@ const AdminPanel = ({ isDarkMode, onClose, triggerToast, appSettings, user, open
     });
 
     const unsubStations = onSnapshot(collection(db, STATIONS_COLLECTION), (snap) => {
-      const stList = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      const stList = gateDocs(snap.docs.map(d => ({ id: d.id, ...d.data() })), activeImport);
       setStationsList(stList);
     });
 
@@ -242,7 +245,7 @@ const AdminPanel = ({ isDarkMode, onClose, triggerToast, appSettings, user, open
       unsubStations();
       unsubPendingLinks();
     };
-  }, []);
+  }, [activeImport]);
 
   // استرداد داتا أكتوبر وزايد والجيزة والقاهرة الكبرى + ربطها ببعضها على الخريطة
   // (بيمسح الداتا القديمة الجاية من الـ seed وروابطها الأول، وبعدين يضيف الجديدة)

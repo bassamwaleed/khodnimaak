@@ -3,6 +3,7 @@ import { onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndP
 import { collection, onSnapshot, doc, getDoc, setDoc, addDoc, updateDoc, serverTimestamp, increment, writeBatch, query, where, getDocs, arrayUnion } from 'firebase/firestore';
 import { Loader2, Car, MessageCircle, User, Home, CheckCircle2, Plus, X, Lock, MapPin, Bell, Search, Check, Route, Phone, Clock, ChevronDown, ChevronUp, Sparkles } from 'lucide-react';
 
+import { gateDocs, useActiveImport } from './utils/importGate';
 import { auth, db, APP_COLLECTION_NAME, USERS_COLLECTION, STATIONS_COLLECTION, LINKS_COLLECTION, ADMIN_EMAIL } from './firebase';
 import { safeMillis, useEgyptianLocation } from './utils/helpers';
 
@@ -129,6 +130,7 @@ export default function App() {
   }, [isDarkMode]);
 
   const [realTrips, setRealTrips] = useState([]); 
+  const activeImport = useActiveImport();
   const [stations, setStations] = useState([]); 
   const [links, setLinks] = useState([]); 
 
@@ -296,22 +298,22 @@ export default function App() {
   useEffect(() => {
     if (!user) return;
     const unsubscribe = onSnapshot(collection(db, STATIONS_COLLECTION), (snapshot) => {
-      const stationsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      const stationsData = gateDocs(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })), activeImport);
       setStations(stationsData);
       setSelectedStation(prev => (prev ? (stationsData.find(s => s.id === prev.id) || prev) : prev));
     });
     return () => unsubscribe();
-  }, [user]);
+  }, [user, activeImport]);
 
   useEffect(() => {
     if (!user) { setLinks([]); return undefined; }
     const unsubscribe = onSnapshot(
       collection(db, LINKS_COLLECTION),
-      (snapshot) => setLinks(snapshot.docs.map(d => ({ id: d.id, ...d.data() }))),
+      (snapshot) => setLinks(gateDocs(snapshot.docs.map(d => ({ id: d.id, ...d.data() })), activeImport)),
       () => setLinks([])
     );
     return () => unsubscribe();
-  }, [user]);
+  }, [user, activeImport]);
 
   useEffect(() => {
     if (!user || isGuest) return;

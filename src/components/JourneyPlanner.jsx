@@ -5,16 +5,27 @@ import { LINK_KINDS } from '../utils/gisConstants';
 import { getDistanceKm, getPlaceCoords } from '../utils/helpers';
 import { normalizeArabic } from '../App';
 import SuggestLinkModal from './SuggestLinkModal';
+import PatternItinerary from './PatternItinerary';
+import { legFareRange } from '../utils/fareEstimate';
+import { buildPatternGraph, planByPattern } from '../utils/patternRouting';
 
 const kindOf = (id) => LINK_KINDS.find(k => k.id === id) || LINK_KINDS[1];
 
 const JourneyPlanner = ({
   stations = [], links = [], user, isGuest, isAdmin, isDarkMode,
-  triggerToast, onSelectStation, userAreas = []
+  triggerToast, onSelectStation, userAreas = [], patterns: patternsProp = null, initialFromId = '', initialToId = ''
 }) => {
+  // خطوط TfC بتتحمّل كسولاً (ملف صغير) ولو فيه نقاط مستوردة بس
+  const [loadedPatterns, setLoadedPatterns] = useState([]);
+  const hasTfc = useMemo(() => stations.some(s => String(s.id).startsWith('tfc_')), [stations]);
+  useEffect(() => {
+    if (patternsProp || !hasTfc || loadedPatterns.length) return;
+    import('../data/tfcPatterns.json').then(m => setLoadedPatterns((m.default || m).patterns || [])).catch(() => {});
+  }, [patternsProp, hasTfc, loadedPatterns.length]);
+  const patterns = patternsProp || loadedPatterns;
   const [open, setOpen] = useState(true);
-  const [fromId, setFromId] = useState('');
-  const [toId, setToId] = useState('');
+  const [fromId, setFromId] = useState(initialFromId);
+  const [toId, setToId] = useState(initialToId);
   const [destQuery, setDestQuery] = useState('');
   const [showOriginPicker, setShowOriginPicker] = useState(false);
   const [criterion, setCriterion] = useState('fast');
@@ -116,7 +127,7 @@ const JourneyPlanner = ({
               fromId: stA.id,
               toId: stB.id,
               kind: 'ride',
-              fare: Number(r.fare) || 0,
+              fare: (r.fare === null || r.fare === undefined || r.fare === '' || !Number.isFinite(Number(r.fare))) ? null : Number(r.fare),
               minutes: Number.isFinite(dist) ? Math.max(5, Math.round(dist * 2)) : 20,
               note: r.boardingHint || r.destinationDetails || `خط ${r.destination}`,
               oneWay: true,
@@ -181,6 +192,13 @@ const JourneyPlanner = ({
     [combinedLinks, byId, fromId, effectiveToId, criterion]
   );
 
+  // خطوط فعلية (patterns) من بيانات TfC: لو الموقفين عندهم ids بتبدأ بـ tfc_ نعرض خطوات الركوب الحقيقية
+  const patternGraph = useMemo(() => (patterns.length ? buildPatternGraph(patterns) : null), [patterns]);
+  const patternPlan = useMemo(() => (
+    patternGraph && fromId?.startsWith('tfc_') && effectiveToId?.startsWith('tfc_') && fromId !== effectiveToId
+      ? planByPattern(patternGraph, fromId.slice(4), effectiveToId.slice(4)) : null
+  ), [patternGraph, fromId, effectiveToId]);
+
   // لو المستخدم كتب وجهة زي "رمسيس" وموقف التبديل في آخر المسار فيه خط يودي "رمسيس"، نعرضهوله كملاحظة ختامية
   const finalHopRoute = useMemo(() => {
     const q = normalizeArabic(destQuery);
@@ -240,9 +258,9 @@ const JourneyPlanner = ({
                 <button
                   type="button"
                   onClick={() => setShowOriginPicker(!showOriginPicker)}
-                  className={`text-xs sm:text-sm font-black truncate block text-right hover:text-indigo-500 ${textPrimary}`}
+                  className={`text-xs sm:text-sm font-black line-clamp-2 break-words block w-full text-right hover:text-indigo-500 ${textPrimary}`}
                 >
-                  {currentOriginNode ? `🚏 ${currentOriginNode.name} (${currentOriginNode.location})` : 'اختر أقرب موقف لك...'} ✎
+                  {currentOriginNode ? <>🚏 <bdi>{currentOriginNode.name}</bdi> (<bdi>{currentOriginNode.location}</bdi>)</> : 'اختر أقرب موقف لك...'} ✎
                 </button>
               </div>
             </div>
@@ -314,20 +332,24 @@ const JourneyPlanner = ({
 
             {/* اقتراحات مطابقة لو فيه أكتر من موقف بنفس الاسم */}
             {destQuery && smartMatches.suggestions.length > 1 && (
-              <div className="flex items-center gap-1.5 overflow-x-auto pt-2 pb-0.5 [&::-webkit-scrollbar]:hidden">
+              <div className="flex items-center flex-wrap gap-1.5 pt-2 pb-0.5">
                 <span className={`text-xs font-bold shrink-0 ${textSecondary}`}>اختر الموقف الأدق:</span>
-                {smartMatches.suggestions.map(st => (
+                {smartMatches.suggestions.map((st, si, arr) => {
+                  const same = arr.filter(x => x.name === st.name);
+                  const label = same.length > 1 ? `${st.name} · نقطة ${same.indexOf(st) + 1}/${same.length}` : st.name;
+                  return (
                   <button
                     key={st.id}
                     type="button"
                     onClick={() => setToId(st.id)}
-                    className={`px-2.5 py-1 rounded-lg text-xs font-black border shrink-0 transition-colors ${
+                    className={`px-2.5 py-1 rounded-lg text-xs font-black border max-w-full text-right break-words transition-colors ${
                       effectiveToId === st.id ? 'bg-indigo-600 text-white border-indigo-600' : bgInput
                     }`}
                   >
-                    {st.name}
+                    {label}
                   </button>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
@@ -359,7 +381,18 @@ const JourneyPlanner = ({
           )}
 
           {/* 4) عرض مسار الشبكة والتحويلات من روابط الأدمن (لو محتاج يركب لموقف تاني أو يبدل) */}
-          {pathResult && smartMatches.directRoutes.length === 0 && (
+          {patternPlan && (
+            <div className="space-y-2 pt-1 animate-fade-in-up">
+              <PatternItinerary plan={patternPlan} nameOf={(sid) => byId['tfc_' + sid]?.name || sid} fareOf={(leg) => (import.meta.env.VITE_ENABLE_FARE_ESTIMATE === 'true' ? legFareRange(leg, byId) : null)} isDarkMode={isDarkMode} />
+            </div>
+          )}
+
+          {!patternPlan && pathResult && pathResult.legs.some(l => l.link && l.link.routeId) && (
+            <div className="p-2.5 rounded-xl border text-xs font-bold bg-amber-50 border-amber-200 text-amber-800">
+              المسار ده بيعدّي على خطوط TfC ومحتاج الاتنين نقط تكون من شبكة TfC عشان نعرض ركوبة واحدة لكل خط. اختار نقطة من نفس الشبكة.
+            </div>
+          )}
+          {!patternPlan && pathResult && !pathResult.legs.some(l => l.link && l.link.routeId) && smartMatches.directRoutes.length === 0 && (
             <div className="space-y-2 pt-1 animate-fade-in-up">
               <div className="flex items-center justify-between gap-2">
                 <div className="flex items-center gap-1.5">
@@ -367,7 +400,7 @@ const JourneyPlanner = ({
                     🧭 خط السير المقترح ({pathResult.transfers === 0 ? 'مباشر' : `${pathResult.transfers} تبديل`}):
                   </span>
                   <span className="text-xs font-black text-emerald-600 bg-emerald-500/10 px-2 py-0.5 rounded-lg">
-                    ⏱ {pathResult.totalMinutes} د • 💰 {pathResult.totalFare + (finalHopRoute ? Number(finalHopRoute.fare) || 0 : 0)} ج
+                    ⏱ {pathResult.totalMinutes} د • 💰 {pathResult.totalFare + (finalHopRoute ? Number(finalHopRoute.fare) || 0 : 0)}{pathResult.unknownFareLegs ? '+ (ناقصة)' : ''} ج
                   </span>
                 </div>
 
@@ -408,7 +441,7 @@ const JourneyPlanner = ({
                           </button>
                         </span>
                         <span className={`text-xs font-black px-2 py-0.5 rounded-md border shrink-0 ${k.badgeClass}`}>
-                          {leg.fare ? `${leg.fare} ج` : k.short}
+                          {leg.fare == null && leg.link.kind === 'ride' ? 'سعر غير معروف' : leg.fare ? `${leg.fare} ج` : k.short}
                         </span>
                       </div>
                       {(leg.link.note || leg.minutes) && (
@@ -443,7 +476,7 @@ const JourneyPlanner = ({
             </div>
           )}
 
-          {(destQuery || toId) && smartMatches.directRoutes.length === 0 && !pathResult && (
+          {(destQuery || toId) && smartMatches.directRoutes.length === 0 && !pathResult && !patternPlan && (
             <div className="p-2.5 rounded-xl border border-amber-500/30 bg-amber-500/10 text-xs font-bold text-amber-700 dark:text-amber-400 flex items-center justify-between gap-2">
               <span>لسه مفيش خط مباشر متسجل لـ "{destQuery}".</span>
               {canSuggest && (

@@ -5,10 +5,12 @@ import {
   Search, AlertTriangle, Sparkles
 } from 'lucide-react';
 import { db, STATIONS_COLLECTION, LINKS_COLLECTION } from '../firebase';
+import { gateDocs, useActiveImport } from '../utils/importGate';
+import TfcImportPanel from './TfcImportPanel';
 import { getPlaceCoords, EGYPT_CITIES, escapeHtml as esc } from '../utils/helpers';
 import { NODE_TYPES, LINK_KINDS, SUGGEST_WALK_KM } from '../utils/gisConstants';
 import {
-  hasExactCoords, coordsOf, linkDocId, isApprovedLink, distanceBetween, estimateMinutes, validLinks,
+  hasExactCoords, coordsOf, linkDocId, isApprovedLink, distanceBetween, estimateMinutes, validLinks, parseFare,
   findBestPath, suggestLinks, analyzeNetwork, bearingDeg
 } from '../utils/gis';
 
@@ -56,10 +58,10 @@ const seedFromId = (id) => ([...String(id)].reduce((a, c) => a + c.charCodeAt(0)
 const nodePos = (st) => coordsOf(st) || getPlaceCoords(st, seedFromId(st.id));
 const typeOf = (st) => NODE_TYPES.find(t => t.id === (st?.nodeType || 'station')) || NODE_TYPES[0];
 const kindOf = (id) => LINK_KINDS.find(k => k.id === id) || LINK_KINDS[1];
-const emptyStationForm = { name: '', location: '', governorate: '', nodeType: 'station' };
+const emptyStationForm = { name: '', location: '', governorate: '', nodeType: 'station', lat: '', lng: '', source: '' };
 
 const newDraft = (fromId = null) => ({
-  fromId, toId: null, kind: 'ride', fare: '', minutes: '', note: '', oneWay: false, minutesTouched: false, existing: false
+  fromId, toId: null, kind: 'ride', fare: '', minutes: '', note: '', source: '', oneWay: false, minutesTouched: false, existing: false
 });
 
 const GisMapTab = ({ isDarkMode, triggerToast, user, stationsList = [], onSeed, isSeeding, supportedAreas = [] }) => {
@@ -77,6 +79,8 @@ const GisMapTab = ({ isDarkMode, triggerToast, user, stationsList = [], onSeed, 
   const [mapReady, setMapReady] = useState(false);
 
   // ── بيانات ──
+  const activeImport = useActiveImport();
+  const [showTfc, setShowTfc] = useState(false);
   const [links, setLinks] = useState([]);
   const [linksError, setLinksError] = useState(false);
 
@@ -106,11 +110,11 @@ const GisMapTab = ({ isDarkMode, triggerToast, user, stationsList = [], onSeed, 
   useEffect(() => {
     const unsub = onSnapshot(
       collection(db, LINKS_COLLECTION),
-      (snap) => { setLinks(snap.docs.map(d => ({ id: d.id, ...d.data() }))); setLinksError(false); },
+      (snap) => { setLinks(gateDocs(snap.docs.map(d => ({ id: d.id, ...d.data() })), activeImport)); setLinksError(false); },
       (err) => { console.error('links snapshot error:', err); setLinksError(true); }
     );
     return unsub;
-  }, []);
+  }, [activeImport]);
 
   // ───────────── قيم مشتقة ─────────────
   const nodesById = useMemo(() => Object.fromEntries(stationsList.map(s => [s.id, s])), [stationsList]);
@@ -276,6 +280,9 @@ const GisMapTab = ({ isDarkMode, triggerToast, user, stationsList = [], onSeed, 
           opacity: dim ? 0.15 : 0.85, dashArray: kind.dashArray, interactive: false
         }).addTo(linksLayer);
 
+        // وصلات TfC (4k+): خط خفيف بس، من غير منطقة ضغط ولا سهم ولا tooltip عشان الخريطة ماتتقلش
+        if (l.routeId) return;
+
         const hit = L.polyline([a, b], { weight: 18, opacity: 0, interactive: true }).addTo(linksLayer);
         hit.on('click', (ev) => { L.DomEvent.stopPropagation(ev); onLinkClickRef.current(l); });
         hit.bindTooltip(
@@ -372,7 +379,11 @@ const GisMapTab = ({ isDarkMode, triggerToast, user, stationsList = [], onSeed, 
   // ───────────── عمليات Firestore ─────────────
   const handleCreateStation = async (e) => {
     e.preventDefault();
-    if (!clickedCoords) return triggerToast('اضغط على الخريطة أولاً لتحديد الموقع 📍');
+    const typedLat = Number(newStation.lat), typedLng = Number(newStation.lng);
+    const hasTyped = newStation.lat !== '' && newStation.lng !== '' && Number.isFinite(typedLat) && Number.isFinite(typedLng)
+      && typedLat >= 22 && typedLat <= 32 && typedLng >= 24 && typedLng <= 37; // داخل حدود مصر
+    const coords = hasTyped ? { lat: typedLat, lng: typedLng } : clickedCoords;
+    if (!coords) return triggerToast('اكتب الإحداثيات أو اضغط على الخريطة 📍');
     if (!newStation.name.trim() || !newStation.location.trim()) return triggerToast('أدخل الاسم والمنطقة');
     setSaving(true);
     try {
@@ -381,8 +392,9 @@ const GisMapTab = ({ isDarkMode, triggerToast, user, stationsList = [], onSeed, 
         nodeType: newStation.nodeType || 'station',
         location: newStation.location.trim(),
         governorate: newStation.governorate || newStation.location.trim(),
-        lat: clickedCoords.lat, lng: clickedCoords.lng,
-        mapUrl: `https://www.google.com/maps?q=${clickedCoords.lat},${clickedCoords.lng}`,
+        lat: coords.lat, lng: coords.lng,
+        mapUrl: `https://www.google.com/maps?q=${coords.lat},${coords.lng}`,
+        source: (newStation.source || '').trim() || null,
         status: 'approved', addedBy: user?.uid || 'admin', routes: [],
         crowdStatus: 'normal', crowdUpdatedAt: Date.now()
       });
@@ -399,17 +411,17 @@ const GisMapTab = ({ isDarkMode, triggerToast, user, stationsList = [], onSeed, 
   const saveLink = async () => {
     if (!draft?.fromId || !draft?.toId) return;
     const dist = distanceBetween(nodesById[draft.fromId], nodesById[draft.toId]);
-    const needsFare = draft.kind === 'ride';
-    if (needsFare && draft.fare === '') return triggerToast('أدخل سعر المواصلة (ممكن 0)');
     const id = linkDocId(draft.fromId, draft.toId, draft.oneWay);
     const old = links.find(l => l.id === id);
-    const minutes = Number(draft.minutes) > 0 ? Number(draft.minutes) : estimateMinutes(draft.kind, dist);
+    // وقت فاضي = غير معروف (null)، مش تقدير محفوظ كأنه وقت حقيقي. السعر فاضي = غير معروف مش صفر.
+    const minutes = Number(draft.minutes) > 0 ? Number(draft.minutes) : null;
     setSaving(true);
     try {
       await setDoc(doc(db, LINKS_COLLECTION, id), {
         fromId: draft.fromId, toId: draft.toId, kind: draft.kind,
-        fare: draft.kind === 'ride' ? Number(draft.fare) || 0 : 0,
-        minutes: minutes ?? null, note: draft.note.trim(), oneWay: !!draft.oneWay,
+        fare: draft.kind === 'ride' ? parseFare(draft.fare) : 0,
+        minutes, note: draft.note.trim(), oneWay: !!draft.oneWay,
+        source: (draft.source || '').trim() || null,
         distanceKm: dist != null ? Number(dist.toFixed(2)) : null,
         status: 'approved', approvedBy: user?.uid || 'admin',
         createdBy: old?.createdBy || user?.uid || 'admin',
@@ -439,7 +451,7 @@ const GisMapTab = ({ isDarkMode, triggerToast, user, stationsList = [], onSeed, 
     try {
       await updateDoc(doc(db, LINKS_COLLECTION, selectedLink.id), {
         kind: editLink.kind,
-        fare: editLink.kind === 'ride' ? Number(editLink.fare) || 0 : 0,
+        fare: editLink.kind === 'ride' ? parseFare(editLink.fare) : 0,
         minutes: Number(editLink.minutes) > 0 ? Number(editLink.minutes) : null,
         note: editLink.note.trim(), updatedAt: Date.now()
       });
@@ -452,7 +464,7 @@ const GisMapTab = ({ isDarkMode, triggerToast, user, stationsList = [], onSeed, 
       await updateDoc(doc(db, LINKS_COLLECTION, l.id), {
         ...(edits ? {
           kind: edits.kind,
-          fare: edits.kind === 'ride' ? Number(edits.fare) || 0 : 0,
+          fare: edits.kind === 'ride' ? parseFare(edits.fare) : 0,
           minutes: Number(edits.minutes) > 0 ? Number(edits.minutes) : null,
           note: edits.note.trim()
         } : {}),
@@ -474,6 +486,7 @@ const GisMapTab = ({ isDarkMode, triggerToast, user, stationsList = [], onSeed, 
     catch (e) { triggerToast('تعذر الحذف'); }
   };
 
+  // نسخة احتياطية JSON كاملة من النقط والروابط المحمّلة (قبل أي استبدال)
   const cleanOrphans = async () => {
     if (!analysis.orphanLinks.length || !window.confirm(`حذف ${analysis.orphanLinks.length} رابط يتيم (نقطته اتمسحت)؟`)) return;
     try {
@@ -531,7 +544,7 @@ const GisMapTab = ({ isDarkMode, triggerToast, user, stationsList = [], onSeed, 
         <span className={`text-xs font-black truncate ${textPrimary}`}>{dirLabel} {other.name}{!isApprovedLink(l) && <span className="text-amber-700"> (اقتراح)</span>}</span>
         <span className="flex items-center gap-1.5 shrink-0">
           <span className={`text-xs font-black px-2 py-0.5 rounded-lg border ${k.badgeClass}`}>{k.short}</span>
-          <span className="text-xs font-black text-emerald-600">{l.fare || 0} ج</span>
+          <span className="text-xs font-black text-emerald-600">{l.kind === 'ride' ? (parseFare(l.fare) == null ? 'سعر غير معروف' : `${parseFare(l.fare)} ج`) : '0 ج'}</span>
           <span className={`text-xs font-bold ${textSecondary}`}>{l.minutes || '؟'} د</span>
         </span>
       </button>
@@ -556,6 +569,14 @@ const GisMapTab = ({ isDarkMode, triggerToast, user, stationsList = [], onSeed, 
               </button>
             ))}
           </div>
+          <div className="grid grid-cols-2 gap-1.5">
+            <input type="number" step="any" inputMode="decimal" aria-label="خط العرض" placeholder="خط العرض (lat)" value={newStation.lat}
+              onChange={e => setNewStation({ ...newStation, lat: e.target.value })} className={inputCls} />
+            <input type="number" step="any" inputMode="decimal" aria-label="خط الطول" placeholder="خط الطول (lng)" value={newStation.lng}
+              onChange={e => setNewStation({ ...newStation, lng: e.target.value })} className={inputCls} />
+          </div>
+          <input type="text" placeholder="المصدر (مثال: TfC GTFS 2025، CC BY 4.0)" value={newStation.source}
+            onChange={e => setNewStation({ ...newStation, source: e.target.value })} className={inputCls} />
           <input type="text" required placeholder="اسم الموقف / النقطة التبادلية" value={newStation.name}
             onChange={e => setNewStation({ ...newStation, name: e.target.value })} className={inputCls} />
           <select required value={newStation.location}
@@ -565,7 +586,7 @@ const GisMapTab = ({ isDarkMode, triggerToast, user, stationsList = [], onSeed, 
             <optgroup label="📍 المناطق والمدن الحيوية">{supportedAreas.map(a => <option key={a} value={a}>{a}</option>)}</optgroup>
             <optgroup label="🏛️ محافظات مصر">{EGYPT_CITIES.map(c => <option key={c} value={c}>{c}</option>)}</optgroup>
           </select>
-          <button type="submit" disabled={saving || !clickedCoords}
+          <button type="submit" disabled={saving || !(clickedCoords || (newStation.lat !== '' && newStation.lng !== ''))}
             className="w-full h-11 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 text-white rounded-xl font-black text-xs">
             {saving ? 'جاري الحفظ...' : 'حفظ النقطة ✅'}
           </button>
@@ -592,20 +613,22 @@ const GisMapTab = ({ isDarkMode, triggerToast, user, stationsList = [], onSeed, 
               {dist != null && <p className={`text-xs font-bold ${textSecondary}`}>المسافة المباشرة: {dist < 1 ? `${Math.round(dist * 1000)} م` : `${dist.toFixed(1)} كم`}</p>}
               <KindPicker value={draft.kind} onChange={(kind) => setDraft(d => ({
                 ...d, kind, fare: kind === 'ride' ? d.fare : '0',
-                minutes: d.minutesTouched ? d.minutes : String(estimateMinutes(kind, dist) ?? '')
+                minutes: d.minutes
               }))} />
               <div className="grid grid-cols-2 gap-2">
                 <label className="space-y-1">
-                  <span className={`text-xs font-bold ${textSecondary}`}>السعر (ج)</span>
+                  <span className={`text-xs font-bold ${textSecondary}`}>السعر (ج) — فاضي = غير معروف</span>
                   <input type="number" min="0" inputMode="numeric" disabled={draft.kind !== 'ride'} value={draft.fare}
                     onChange={e => setDraft({ ...draft, fare: e.target.value })} className={`${inputCls} disabled:opacity-50`} />
                 </label>
                 <label className="space-y-1">
-                  <span className={`text-xs font-bold ${textSecondary}`}>الوقت (دقيقة)</span>
+                  <span className={`text-xs font-bold ${textSecondary}`}>الوقت (دقيقة) — فاضي = غير معروف</span>
                   <input type="number" min="0" inputMode="numeric" value={draft.minutes}
                     onChange={e => setDraft({ ...draft, minutes: e.target.value, minutesTouched: true })} className={inputCls} />
                 </label>
               </div>
+              <input type="text" placeholder="المصدر (مثال: TfC GTFS 2025، CC BY 4.0)" value={draft.source}
+                onChange={e => setDraft({ ...draft, source: e.target.value })} className={inputCls} />
               <input type="text" placeholder="ملاحظة (مثال: اطلع سلم الدائري)" value={draft.note}
                 onChange={e => setDraft({ ...draft, note: e.target.value })} className={inputCls} />
               <label className={`min-h-11 flex items-center gap-2 text-xs font-black cursor-pointer ${textPrimary}`}>
@@ -669,7 +692,7 @@ const GisMapTab = ({ isDarkMode, triggerToast, user, stationsList = [], onSeed, 
           {planResult && (
             <div className="space-y-2">
               <div className="grid grid-cols-3 gap-1.5 text-center">
-                {[[`${planResult.totalMinutes} د`, 'الوقت'], [`${planResult.totalFare} ج`, 'التكلفة'], [planResult.transfers, 'تحويلات']].map(([v, l]) => (
+                {[[planResult.unknownMinutesLegs ? `${planResult.totalMinutes}+ د` : `${planResult.estimatedMinutesLegs ? '~' : ''}${planResult.totalMinutes} د`, planResult.unknownMinutesLegs ? 'الوقت (ناقص)' : planResult.estimatedMinutesLegs ? 'الوقت (تقدير)' : 'الوقت'], [planResult.unknownFareLegs ? `${planResult.totalFare}+ ج` : `${planResult.totalFare} ج`, planResult.unknownFareLegs ? 'التكلفة (ناقصة)' : 'التكلفة'], [planResult.transfers, 'تحويلات']].map(([v, l]) => (
                   <div key={l} className={`p-2 rounded-xl border ${cardBg}`}>
                     <p className="text-base font-black text-emerald-600">{v}</p>
                     <p className={`text-xs font-bold ${textSecondary}`}>{l}</p>
@@ -684,7 +707,7 @@ const GisMapTab = ({ isDarkMode, triggerToast, user, stationsList = [], onSeed, 
                       <span className={`text-xs font-black truncate ${textPrimary}`}>{nodesById[leg.fromId].name} ← {nodesById[leg.toId].name}</span>
                       <span className={`text-xs font-black px-2 py-0.5 rounded-lg border shrink-0 ${k.badgeClass}`}>{k.short}</span>
                     </div>
-                    <p className={`text-xs font-bold ${textSecondary}`}>{leg.minutes} د • {leg.fare} ج{leg.link.note ? ` • ${leg.link.note}` : ''}</p>
+                    <p className={`text-xs font-bold ${textSecondary}`}>{leg.minutes == null ? 'وقت غير معروف' : `${leg.minutesEstimated ? '~' : ''}${leg.minutes} د`} • {leg.fare == null ? 'سعر غير معروف' : `${leg.fare} ج`}{leg.link.note ? ` • ${leg.link.note}` : ''}</p>
                   </div>
                 );
               })}
@@ -812,7 +835,7 @@ const GisMapTab = ({ isDarkMode, triggerToast, user, stationsList = [], onSeed, 
                 <div key={l.id} className={`p-2.5 rounded-xl border space-y-2 ${cardBg}`}>
                   <button type="button" onClick={() => { setSelectedLinkId(l.id); setSelectedId(null); flyTo(a); }} className="w-full text-right space-y-0.5">
                     <p className={`text-xs font-black ${textPrimary}`}>{a.name} ⇄ {b.name}</p>
-                    <p className={`text-xs font-bold ${textSecondary}`}>{k.short} • {l.kind === 'ride' ? `${l.fare} ج • ` : ''}{l.minutes || '؟'} د{l.note ? ` • ${l.note}` : ''}</p>
+                    <p className={`text-xs font-bold ${textSecondary}`}>{k.short} • {l.kind === 'ride' ? `${parseFare(l.fare) == null ? 'سعر غير معروف' : `${parseFare(l.fare)} ج`} • ` : ''}{l.minutes ? `${l.minutes} د` : 'وقت غير معروف'}{l.note ? ` • ${l.note}` : ''}</p>
                     <p className={`text-xs font-bold ${textSecondary}`}>من: {l.suggestedByName || 'مستخدم'}</p>
                   </button>
                   <div className="grid grid-cols-2 gap-2">
@@ -888,11 +911,16 @@ const GisMapTab = ({ isDarkMode, triggerToast, user, stationsList = [], onSeed, 
           <ModeBtn id="add" icon={<MapPin size={14} />}>إضافة نقطة</ModeBtn>
           <ModeBtn id="link" icon={<Link2 size={14} />}>ربط النقاط</ModeBtn>
           <ModeBtn id="plan" icon={<Route size={14} />}>تخطيط مسار</ModeBtn>
+          {import.meta.env.VITE_ENABLE_TFC_IMPORT === 'true' && (
+            <button type="button" onClick={() => setShowTfc(v => !v)}
+              className="min-h-11 px-3 rounded-xl text-xs font-black border bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700">استيراد TfC</button>
+          )}
           <button type="button" disabled={isSeeding} onClick={onSeed}
             className="min-h-11 px-3 rounded-xl text-xs font-black flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white disabled:opacity-50">
             {isSeeding ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />} داتا أكتوبر وزايد
           </button>
         </div>
+        {showTfc && <TfcImportPanel triggerToast={triggerToast} isDarkMode={isDarkMode} />}
         <div className="flex items-center gap-1.5 overflow-x-auto [&::-webkit-scrollbar]:hidden">
           {[['links', showLinks, () => setShowLinks(!showLinks), `الروابط (${approvedCount})`],
             ['dest', showDestLines, () => setShowDestLines(!showDestLines), 'خطوط الوجهات']].map(([id, on, fn, label]) => (

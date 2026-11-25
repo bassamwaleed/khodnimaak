@@ -1,0 +1,12 @@
+import { readFileSync } from 'node:fs';
+import assert from 'node:assert/strict';
+import { validLinks, analyzeNetwork, suggestLinks, findBestPath, hasExactCoords } from '../src/utils/gis.js';
+const net = JSON.parse(readFileSync('src/data/tfcNetwork.json'));
+const nodes = net.nodes.map(n => ({ ...n, status: 'approved', nodeType: 'stop' }));
+const byId = Object.fromEntries(nodes.map(n => [n.id, n]));
+const links = net.links.map(l => ({ ...l, kind: 'ride', status: 'approved', fare: null, minutes: null, oneWay: true }));
+const t = (name, f, max) => { const s = performance.now(); const r = f(); const ms = performance.now() - s; console.log(name, ms.toFixed(0) + 'ms'); assert.ok(ms < max, name + ' too slow'); return r; };
+t('validLinks', () => validLinks(links, byId), 500);
+t('analyzeNetwork', () => analyzeNetwork(nodes, links), 2000);
+t('suggestLinks(link mode)', () => suggestLinks(nodes.filter(hasExactCoords), links, 0.4, 8), 3000);
+t('findBestPath legacy (ignores TfC)', () => findBestPath(links, byId, nodes[0].id, nodes[5].id), 500);

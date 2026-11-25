@@ -4,6 +4,7 @@ import { X, Send, Bot, Sparkles, BusFront, Compass, ChevronLeft, Edit3, PlusCirc
 import {
   collection, addDoc, doc, updateDoc, setDoc, onSnapshot, arrayUnion, increment, serverTimestamp
 } from 'firebase/firestore';
+import { gateDocs, useActiveImport } from '../utils/importGate';
 import { db, ADMIN_EMAIL, STATIONS_COLLECTION, LINKS_COLLECTION } from '../firebase';
 import { getPlaceCoords, getDistanceKm } from '../utils/helpers';
 
@@ -120,7 +121,7 @@ function createEngine(stations, links, isAdmin) {
     adj.get(from).push({ from, to, ...data });
   };
   (links || []).forEach(l => {
-    if (!l || !byId.has(l.fromId) || !byId.has(l.toId) || !okStatus(l.status)) return;
+    if (!l || l.routeId || !byId.has(l.fromId) || !byId.has(l.toId) || !okStatus(l.status)) return; // وصلات TfC بتتحسب بالـpatterns مش بالـhop
     const fare = toNum(l.fare);
     const base = { fare, minutes: toNum(l.minutes) ?? estMinutes(l.fromId, l.toId), kind: l.kind || 'ride', note: l.note || '' };
     addEdge(l.fromId, l.toId, base);
@@ -277,6 +278,8 @@ function createEngine(stations, links, isAdmin) {
   const TAG_LABEL = { fast: 'الأسرع ⏱️', cheap: 'الأرخص 💰', direct: 'أقل تبديل 🎯' };
 
   const plan = (oRes, dRes) => {
+    // شبكة TfC محتاجة حساب بالـpatterns (ركوبة لكل خط). Beso لسه مش بيدعمها: رد واضح بدل "مفيش مسار"
+    if ([...oRes.candidates, ...dRes.candidates].some(c => String(c.st.id).startsWith('tfc_'))) return { unsupportedNetwork: true, options: [] };
     const targets = new Set(dRes.candidates.map(c => c.st.id));
     const sources = oRes.candidates.filter(c => !targets.has(c.st.id))
       .map(c => ({ id: c.st.id, init: (1 - c.score) * 15 + (c.extra || 0) }));
@@ -368,6 +371,7 @@ export const GUIDES_COLLECTION = 'beso_knowledge_updates';
 //   stations / links / guides : لو مرّرتهم جاهزين (من App) بيستخدمهم بدل ما يفتح اشتراكات جديدة
 //   enabled=false             : يوقف الاشتراكات (لما المكوّن ياخد transit جاهز من فوق)
 export function useTransitData({ stations: stationsProp, links: linksProp, guides: guidesProp, isAdmin = false, enabled = true } = {}) {
+  const activeImport = useActiveImport();
   const [ownStations, setOwnStations] = useState([]);
   const [ownLinks, setOwnLinks] = useState([]);
   const [ownGuides, setOwnGuides] = useState([]);
@@ -379,17 +383,17 @@ export function useTransitData({ stations: stationsProp, links: linksProp, guide
   useEffect(() => {
     if (!useOwnStations) return undefined;
     const unsub = onSnapshot(collection(db, STATIONS_COLLECTION),
-      (snap) => { setOwnStations(snap.docs.map(d => ({ id: d.id, ...d.data() }))); setLoading(false); },
+      (snap) => { setOwnStations(gateDocs(snap.docs.map(d => ({ id: d.id, ...d.data() })), activeImport)); setLoading(false); },
       () => setLoading(false));
     return () => unsub();
-  }, [useOwnStations]);
+  }, [useOwnStations, activeImport]);
 
   useEffect(() => {
     if (!useOwnLinks) return undefined;
     const unsub = onSnapshot(collection(db, LINKS_COLLECTION),
-      (snap) => setOwnLinks(snap.docs.map(d => ({ id: d.id, ...d.data() }))), () => setOwnLinks([]));
+      (snap) => setOwnLinks(gateDocs(snap.docs.map(d => ({ id: d.id, ...d.data() })), activeImport)), () => setOwnLinks([]));
     return () => unsub();
-  }, [useOwnLinks]);
+  }, [useOwnLinks, activeImport]);
 
   useEffect(() => {
     if (!useOwnGuides) return undefined;
@@ -655,6 +659,12 @@ const BesoAssistantModal = ({ stations = [], links: linksProp, transit: transitP
       return { text: `🤔 **(${oLabel})** و **(${dLabel})** هما نفس النقطة أو قريبين جداً من بعض.\nجرب تحدد مكان أبعد شوية، أو قولي رايح فين بالظبط.`, stations: dRes.candidates.slice(0, 2).map(c => c.st) };
     }
 
+    if (planResult.unsupportedNetwork) {
+      return {
+        text: '🚧 النقطة دي من شبكة Transport for Cairo الجديدة، ومساعد بيسو لسه **مش بيدعمها**. مش هقولك "مفيش مسار" لأن ده مش صحيح بالضرورة.\n\n👈 استخدم **مخطط الرحلة** (اكتب رايح فين) عشان يحسب لك الخط بالتفصيل. الأجرة والوقت "غير معروف" لحد ما تتسجل.',
+        stations: []
+      };
+    }
     if (!planResult.options.length) {
       const oN = oRes.candidates.slice(0, 2).map(c => `**${c.st.name}**`).join(' أو ');
       const dN = dRes.candidates.slice(0, 2).map(c => `**${c.st.name}**`).join(' أو ');

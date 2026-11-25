@@ -1,0 +1,10 @@
+import assert from 'node:assert/strict';
+import { estimateFareRange, sumRanges } from '../src/utils/fareEstimate.js';
+const r = estimateFareRange(4.2);
+assert.deepEqual([r.min, r.max, r.estimated], [8, 10, true]);
+assert.equal(estimateFareRange(null), null);
+assert.equal(estimateFareRange(-1), null);
+assert.equal(estimateFareRange(5, [{ fromKm: 0, toKm: 99, n: 3, p25: 1, p75: 2 }]), null, 'thin bin => unknown');
+assert.equal(sumRanges([r, null]), null);
+assert.deepEqual(sumRanges([r, r]), { min: 16, max: 20, estimated: true });
+console.log('fare estimate OK');
