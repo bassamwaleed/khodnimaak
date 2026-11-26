@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { 
   Route, ArrowLeftRight, Search, X, Loader2, BusFront, MapPin, 
-  Navigation, SlidersHorizontal, Plus 
+  Navigation, SlidersHorizontal, Plus, Footprints, RefreshCw, Flag, ChevronDown
 } from 'lucide-react';
 import { useTfc } from '../utils/tfcStore';
 import { planTrips, searchStations, nearestStation, stationLabel } from '../utils/tfc';
@@ -101,6 +101,13 @@ const Picker = ({ net, placeholder, value, onChange, onTextChange, onGps, locati
 
 const fareText = (o) => (o.unknownFareLegs === 0 ? `${o.totalFare} ج`
   : o.totalFare > 0 ? `${o.totalFare}+ ج (${o.unknownFareLegs} ركوبة غير مسعرة)` : 'السعر غير محدد');
+
+// وصف مسافة المشي بأسلوب سهل وبسيط
+const describeWalk = (meters, minutes) => {
+  if (meters <= 80) return `خطوات بسيطة جداً (~${meters} متر - أقل من دقيقة)`;
+  if (meters <= 180) return `هتتمشى شوية صغيرين (~${meters} متر - حوالي ${minutes} د)`;
+  return `هتتمشى حوالي ${meters} متر (${minutes} دقائق تقريباً)`;
+};
 
 const TfcPlanner = ({
   stations = [],
@@ -214,7 +221,7 @@ const TfcPlanner = ({
         </div>
       )}
 
-      {/* نتائج تخطيط المسار المدمجة (TfC + مواقف Firestore) */}
+      {/* نتائج تخطيط المسار المدمجة */}
       {net && options && !options.length && (
         <div className="p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-xs font-bold text-amber-600 dark:text-amber-400">
           لا يوجد مسار مباشر أو بالتبديل بين المحطتين حالياً. جرّب اختيار أقرب محطة رئيسية أو ابحث في المواقف بالأسفل.
@@ -225,53 +232,128 @@ const TfcPlanner = ({
         <div className="space-y-2 pt-1 border-t border-slate-100 dark:border-slate-800">
           <div className="flex items-center justify-between px-1">
             <span className="text-xs font-black text-indigo-600 dark:text-indigo-400 flex items-center gap-1">
-              <Route size={14} /> أفضل المسارات المقترحة ({options.length})
+              <Route size={14} /> دليل المشوار المقترح ({options.length} بدائل)
             </span>
             <button
               type="button"
               onClick={() => { setFrom(''); setTo(''); if (onSearchChange) onSearchChange(''); }}
               className="text-xs font-bold text-rose-500 hover:underline"
             >
-              إغلاق المسارات
+              مسح البحث
             </button>
           </div>
 
-          {options.map((o, i) => (
-            <div key={i} className={`rounded-xl border overflow-hidden ${isDarkMode ? 'border-slate-700 bg-slate-800/40' : 'border-slate-200 bg-slate-50/50'}`}>
-              <button type="button" onClick={() => setOpenIdx(openIdx === i ? -1 : i)} className="w-full text-start p-2.5">
-                <div className="flex items-center gap-1.5 flex-wrap text-xs font-black">
-                  <span>⏱ {o.estimated ? '~' : ''}{o.totalMinutes} د</span>
-                  <span>•</span>
-                  <span className="text-emerald-600 dark:text-emerald-400">💰 {fareText(o)}</span>
-                  <span>•</span>
-                  <span>{o.transfers === 0 ? 'مباشر بدون تبديل' : `${o.transfers} تبديل`}</span>
-                  {o.fastest && <span className="px-1.5 py-0.5 rounded-full bg-indigo-600/15 text-indigo-600 dark:text-indigo-400">أسرع</span>}
-                  {o.fewest && <span className="px-1.5 py-0.5 rounded-full bg-sky-600/15 text-sky-600 dark:text-sky-400">أقل تبديلات</span>}
-                  {o.cheapest && <span className="px-1.5 py-0.5 rounded-full bg-emerald-600/15 text-emerald-600 dark:text-emerald-400">أرخص</span>}
-                </div>
-              </button>
+          {options.map((o, i) => {
+            const isExpanded = openIdx === i;
+            let rideStepCount = 0;
 
-              {openIdx === i && (
-                <div className="px-2.5 pb-2.5 space-y-2 border-t border-slate-200/70 dark:border-slate-700/70 pt-2">
-                  {o.legs.map((l, j) => l.type === 'walk' ? (
-                    <div key={j} className="text-xs font-bold text-slate-600 dark:text-slate-300">
-                      🚶 امشي ~{l.meters} م ({l.minutes} د) من <strong>{name(l.fromId)}</strong> إلى <strong>{name(l.toId)}</strong>
+            return (
+              <div key={i} className={`rounded-xl border overflow-hidden transition-all ${isDarkMode ? 'border-slate-700 bg-slate-800/40' : 'border-slate-200 bg-slate-50/50'}`}>
+                <button type="button" onClick={() => setOpenIdx(isExpanded ? -1 : i)} className="w-full text-start p-2.5 flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-1.5 flex-wrap text-xs font-black">
+                    <span>⏱ {o.estimated ? '~' : ''}{o.totalMinutes} د</span>
+                    <span>•</span>
+                    <span className="text-emerald-600 dark:text-emerald-400">💰 {fareText(o)}</span>
+                    <span>•</span>
+                    <span>{o.transfers === 0 ? 'مباشر بدون تبديل' : `${o.transfers} تبديل`}</span>
+                    {o.fastest && <span className="px-1.5 py-0.5 rounded-full bg-indigo-600/15 text-indigo-600 dark:text-indigo-400">أسرع</span>}
+                    {o.fewest && <span className="px-1.5 py-0.5 rounded-full bg-sky-600/15 text-sky-600 dark:text-sky-400">أقل تبديلات</span>}
+                    {o.cheapest && <span className="px-1.5 py-0.5 rounded-full bg-emerald-600/15 text-emerald-600 dark:text-emerald-400">أرخص</span>}
+                  </div>
+                  <ChevronDown size={15} className={`text-slate-400 shrink-0 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
+                </button>
+
+                {isExpanded && (
+                  <div className="px-3 pb-3 pt-2.5 border-t border-slate-200/70 dark:border-slate-700/70 space-y-2.5">
+                    
+                    {/* ملخص سريع للمشوار */}
+                    <div className={`p-2 rounded-xl text-xs font-bold leading-relaxed ${isDarkMode ? 'bg-indigo-950/40 text-indigo-200 border border-indigo-500/20' : 'bg-indigo-50 text-indigo-900 border border-indigo-200/70'}`}>
+                      {o.transfers === 0
+                        ? `✨ مشوارك مباشر! هتركب مواصلة واحدة من "${name(from)}" وتنزل في "${name(to)}" على طول.`
+                        : `🧭 مشوارك فيه ${o.transfers} تبديل${o.walkMeters > 0 ? ` مع مشي بسيط (${o.walkMeters} م)` : ''}. اتبع الخطوات بالترتيب:`}
                     </div>
-                  ) : (
-                    <div key={j} className="text-xs font-bold leading-6">
-                      <div className="flex items-center gap-1">
-                        <BusFront size={13} className="inline text-indigo-600 shrink-0" />
-                        <span>{l.name}{l.custom ? ' ⭐' : ''}: من <strong>{name(l.boardId)}</strong> إلى <strong>{name(l.alightId)}</strong></span>
-                      </div>
-                      <div className="opacity-75 font-medium pr-4">
-                        {l.hops} محطة • {l.minutesEstimated ? '~' : ''}{Math.round(l.minutes)} د • {l.fare === null ? 'السعر غير محدد' : `${l.fare} ج`}
+
+                    {/* خطوات الرحلة بالتفصيل */}
+                    <div className="relative pr-3 border-r-2 border-indigo-500/30 space-y-3">
+                      {o.legs.map((l, j) => {
+                        const prevLeg = j > 0 ? o.legs[j - 1] : null;
+                        const isLastLeg = j === o.legs.length - 1;
+
+                        if (l.type === 'walk') {
+                          return (
+                            <div key={j} className={`p-2.5 rounded-xl border text-xs space-y-1 ${isDarkMode ? 'bg-amber-950/20 border-amber-500/30 text-amber-200' : 'bg-amber-50/80 border-amber-200 text-amber-900'}`}>
+                              <div className="font-black flex items-center gap-1.5">
+                                <Footprints size={14} className="text-amber-500 shrink-0" />
+                                <span>
+                                  {prevLeg?.type === 'ride'
+                                    ? `انزل هنا في "${name(l.fromId)}" واتمشى شوية للتبديل`
+                                    : `ابدأ بالمشي من "${name(l.fromId)}"`}
+                                </span>
+                              </div>
+                              <p className="font-bold opacity-85 pr-5">
+                                {describeWalk(l.meters, l.minutes)} لحد ما توصل عند <strong>{name(l.toId)}</strong>.
+                              </p>
+                            </div>
+                          );
+                        }
+
+                        rideStepCount++;
+                        const showDirectTransferBanner = prevLeg && prevLeg.type === 'ride';
+
+                        return (
+                          <React.Fragment key={j}>
+                            {/* تنبيه التبديل المباشر في نفس المحطة */}
+                            {showDirectTransferBanner && (
+                              <div className={`p-2 rounded-xl border text-xs font-black flex items-center gap-1.5 ${isDarkMode ? 'bg-sky-950/30 border-sky-500/30 text-sky-300' : 'bg-sky-50 border-sky-200 text-sky-800'}`}>
+                                <RefreshCw size={13} className="text-sky-500 shrink-0" />
+                                <span>هتنزل هنا في "{name(l.boardId)}" وتبدّل للمواصلة اللي بعدها 👇</span>
+                              </div>
+                            )}
+
+                            {/* بطاقة الركوبة */}
+                            <div className={`p-2.5 rounded-xl border text-xs space-y-1 ${isDarkMode ? 'bg-slate-900/90 border-slate-700' : 'bg-white border-slate-200 shadow-2xs'}`}>
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="font-black text-indigo-600 dark:text-indigo-400 flex items-center gap-1.5">
+                                  <BusFront size={14} className="shrink-0" />
+                                  <span>
+                                    {rideStepCount === 1 ? 'أولاً: اركب' : `بعدين: اركب`} {l.name}
+                                    {l.custom ? ' ⭐' : ''}
+                                  </span>
+                                </span>
+                                <span className="px-2 py-0.5 rounded-lg bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 font-black shrink-0">
+                                  {l.fare === null ? 'غير مسعر' : `${l.fare} ج`}
+                                </span>
+                              </div>
+
+                              <div className="font-bold leading-relaxed pr-5 space-y-0.5">
+                                <div>
+                                  📍 <strong>هتركب من:</strong> {name(l.boardId)}
+                                </div>
+                                <div>
+                                  🛑 <strong>وهتنزل عند:</strong> {name(l.alightId)}
+                                  {isLastLeg && <span className="text-emerald-600 dark:text-emerald-400 font-black"> (وجهتك النهائية 🎯)</span>}
+                                </div>
+                                <div className="text-[11px] opacity-70 pt-0.5">
+                                  المدة التقريبية: {l.minutesEstimated ? '~' : ''}{Math.round(l.minutes)} دقيقة ({l.hops} محطة)
+                                </div>
+                              </div>
+                            </div>
+                          </React.Fragment>
+                        );
+                      })}
+
+                      {/* رسالة الوصول */}
+                      <div className="flex items-center gap-1.5 text-xs font-black text-emerald-600 dark:text-emerald-400 pt-0.5">
+                        <Flag size={13} className="shrink-0" />
+                        <span>حمدلله على السلامة! وصلت إلى {name(to)}</span>
                       </div>
                     </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          ))}
+
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
     </div>
