@@ -6,7 +6,6 @@ import {
   X, ShieldCheck, Users, BusFront, Settings, Search, CheckCircle2, 
   XCircle, Ban, Award, Crown, Eye, Plus, Trash2, Check, Loader2, Lock, MessageSquareOff, Car, Activity, Gift, MapPinned, MapPin, Route, Navigation 
 } from 'lucide-react';
-import { gateDocs, useActiveImport } from '../utils/importGate';
 import { db, USERS_COLLECTION, APP_COLLECTION_NAME, STATIONS_COLLECTION, LINKS_COLLECTION } from '../firebase';
 import VerificationImage from './VerificationImage';
 import VerificationMigration from './VerificationMigration';
@@ -15,6 +14,7 @@ import { resizeAndConvertToBase64, formatTripDateTime, getPlaceCoords, EGYPT_CIT
 import { SUPPORTED_AREAS, NODE_TYPES } from '../utils/gisConstants';
 import { linkDocId, distanceBetween } from '../utils/gis';
 import GisMapTab from './GisMapTab';
+import TfcAdmin from './TfcAdmin';
 
 // re-export: StationModal وغيره لسه بيستوردوا NODE_TYPES من هنا
 export { NODE_TYPES };
@@ -218,8 +218,6 @@ const AdminPanel = ({ isDarkMode, onClose, triggerToast, appSettings, user, open
   const textSecondary = isDarkMode ? 'text-slate-400' : 'text-slate-500';
   const bgInput = isDarkMode ? 'bg-slate-800 border-slate-700 text-white' : 'bg-slate-50 border-slate-200 text-slate-900';
 
-  const activeImport = useActiveImport();
-
   useEffect(() => {
     const unsubUsers = onSnapshot(collection(db, USERS_COLLECTION), (snap) => {
       const list = snap.docs.map(d => ({ id: d.id, ...d.data() }));
@@ -230,7 +228,7 @@ const AdminPanel = ({ isDarkMode, onClose, triggerToast, appSettings, user, open
     });
 
     const unsubStations = onSnapshot(collection(db, STATIONS_COLLECTION), (snap) => {
-      const stList = gateDocs(snap.docs.map(d => ({ id: d.id, ...d.data() })), activeImport);
+      const stList = snap.docs.map(d => ({ id: d.id, ...d.data() }));
       setStationsList(stList);
     });
 
@@ -245,7 +243,7 @@ const AdminPanel = ({ isDarkMode, onClose, triggerToast, appSettings, user, open
       unsubStations();
       unsubPendingLinks();
     };
-  }, [activeImport]);
+  }, []);
 
   // استرداد داتا أكتوبر وزايد والجيزة والقاهرة الكبرى + ربطها ببعضها على الخريطة
   // (بيمسح الداتا القديمة الجاية من الـ seed وروابطها الأول، وبعدين يضيف الجديدة)
@@ -656,6 +654,13 @@ const AdminPanel = ({ isDarkMode, onClose, triggerToast, appSettings, user, open
           </button>
 
           <button 
+            onClick={() => setActiveTab('tfc')} 
+            className={`flex-1 min-w-[115px] py-2.5 px-2.5 rounded-xl text-xs font-black flex items-center justify-center gap-1.5 transition-all ${activeTab === 'tfc' ? 'bg-emerald-600 text-white shadow-md' : 'bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300'}`}
+          >
+            🚌 شبكة TfC
+          </button>
+
+          <button 
             onClick={() => setActiveTab('gis_map')} 
             className={`flex-1 min-w-[125px] py-2.5 px-2.5 rounded-xl text-xs font-black flex items-center justify-center gap-1.5 transition-all ${activeTab === 'gis_map' ? 'bg-emerald-600 text-white shadow-md' : textSecondary}`}
           >
@@ -736,6 +741,8 @@ const AdminPanel = ({ isDarkMode, onClose, triggerToast, appSettings, user, open
               supportedAreas={SUPPORTED_AREAS}
             />
           )}
+
+          {activeTab === 'tfc' && <TfcAdmin triggerToast={triggerToast} />}
 
           {/* تبويب طلبات البونص والشارات */}
           {activeTab === 'bonus_claims' && (

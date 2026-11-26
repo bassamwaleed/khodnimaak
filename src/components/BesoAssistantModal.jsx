@@ -4,19 +4,16 @@ import { X, Send, Bot, Sparkles, BusFront, Compass, ChevronLeft, Edit3, PlusCirc
 import {
   collection, addDoc, doc, updateDoc, setDoc, onSnapshot, arrayUnion, increment, serverTimestamp
 } from 'firebase/firestore';
-import { gateDocs, useActiveImport } from '../utils/importGate';
 import { db, ADMIN_EMAIL, STATIONS_COLLECTION, LINKS_COLLECTION } from '../firebase';
 import { getPlaceCoords, getDistanceKm } from '../utils/helpers';
+import { useTfc } from '../utils/tfcStore';
+import { stationLabel } from '../utils/tfc';
 
 
 // =====================================================================
 //  1) محرك بيسو: بحث ذكي + رسم بياني للشبكة + أقصر/أرخص مسار + بحث موحد (smartSearch)
 // =====================================================================
 // ==ENGINE_START==
-/* ===================================================================
-   محرك بيسو: بحث ذكي عن الأماكن + رسم بياني للشبكة + أقصر/أرخص مسار
-   (دوال نقية بدون React، بتاخد المواقف والروابط وترجع إجابات)
-   =================================================================== */
 const toNum = (v) => { if (v === null || v === undefined || v === '') return null; const n = Number(v); return Number.isFinite(n) ? n : null; };
 
 const norm = (s) => String(s ?? '')
@@ -28,17 +25,14 @@ const norm = (s) => String(s ?? '')
   .replace(/[^\u0600-\u06FFa-z0-9\s]/g, ' ')
   .replace(/\s+/g, ' ').trim();
 
-// كلمات مش بتحدد مكان (بتتشال من اسم المكان المطلوب)
 const STOP = new Set(['من', 'الي', 'الى', 'ل', 'لحد', 'عند', 'في', 'ف', 'انا', 'عايز', 'عاوز', 'اروح', 'هروح', 'رايح', 'رايحه',
   'مواصلات', 'خط', 'ازاي', 'اركب', 'ايه', 'ده', 'دي', 'لو', 'ممكن', 'يا', 'بيسو', 'كام', 'بكام', 'اجره', 'سعر', 'تعريفه',
   'اقرب', 'اسرع', 'ارخص', 'اوفر', 'اقصر', 'تبديل', 'مباشر', 'بدون', 'غير', 'وقت', 'اقل', 'طريق', 'ليا', 'لي', 'مني', 'وصلني', 'وديني', 'طيب', 'هل', 'عشان']);
-// كلمات عامة وزنها قليل في المطابقة
 const GENERIC = new Set(['ميدان', 'موقف', 'محطه', 'مدينه', 'منطقه', 'حي', 'تقاطع', 'بوابه', 'مدخل', 'محور', 'شارع', 'نقطه', 'سلم', 'مواقف']);
 const FILL = new Set(['يا', 'بيسو', 'ممكن', 'لو', 'سمحت', 'عايز', 'عاوز', 'انا', 'ازاي', 'هل', 'طيب', 'يعني', 'بقي', 'عشان', 'مواصلات', 'موصلات',
   'اركب', 'اروح', 'هروح', 'رايح', 'رايحه', 'اسافر', 'وصلني', 'وديني', 'روح', 'كام', 'بكام', 'اجره', 'سعر', 'تعريفه', 'مكاني', 'موجود', 'واقف', 'متواجد', 'قاعد', 'خط', 'ايه']);
 const MARK = new Set(['الي', 'الى', 'لحد', 'رايح', 'رايحه', 'اروح', 'هروح', 'اسافر', 'اتجاه', 'ل', 'وجهتي']);
 
-// أسماء تانية للأماكن (لهجات/أسماء شائعة) → كلمات بحث إضافية
 const ALIASES = [
   ['ابني بيتك', 'حدائق اكتوبر'], ['دهشور', 'حدائق اكتوبر'], ['فيوم', 'حدائق اكتوبر'],
   ['واحات', 'مول مصر'], ['واحات', 'دريم لاند'], ['msa', 'جامعه 6 اكتوبر'], ['ام اس ايه', 'جامعه 6 اكتوبر'],
@@ -72,7 +66,6 @@ const stem = (t) => {
 const tokenize = (s, dropStops = true) => norm(s).split(' ').filter(Boolean).map(stem)
   .filter(t => (t.length > 1 || /\d/.test(t)) && !(dropStops && STOP.has(t)));
 
-// تطابق كلمتين: تام / بداية-نهاية (يغطي ل و ب الملزوقة) / غلطة إملائية
 const tokenMatch = (a, b) => {
   if (a === b) return 1;
   const la = a.length, lb = b.length;
@@ -121,13 +114,12 @@ function createEngine(stations, links, isAdmin) {
     adj.get(from).push({ from, to, ...data });
   };
   (links || []).forEach(l => {
-    if (!l || l.routeId || !byId.has(l.fromId) || !byId.has(l.toId) || !okStatus(l.status)) return; // وصلات TfC بتتحسب بالـpatterns مش بالـhop
+    if (!l || !byId.has(l.fromId) || !byId.has(l.toId) || !okStatus(l.status)) return;
     const fare = toNum(l.fare);
     const base = { fare, minutes: toNum(l.minutes) ?? estMinutes(l.fromId, l.toId), kind: l.kind || 'ride', note: l.note || '' };
     addEdge(l.fromId, l.toId, base);
     if (!l.oneWay) addEdge(l.toId, l.fromId, base);
   });
-  // احتياطي: لو الروابط مش متسجلة، نبني الشبكة من خطوط كل موقف (routes)
   stations.forEach(s => (s.routes || []).forEach(r => {
     if (!okStatus(r.status)) return;
     const t = nameIdx.get(norm(r.destinationDetails || ''));
@@ -158,7 +150,6 @@ function createEngine(stations, links, isAdmin) {
         out = { text, score: best, candidates: scored.filter(x => x.score >= Math.max(0.6, best * 0.9)).slice(0, 8) };
       } else {
         out = { text, score: best, candidates: [], suggestions: scored.filter(x => x.score >= 0.3).slice(0, 3).map(x => x.st) };
-        // محاولة أخيرة: إحداثيات المكان لو الدالة بتعرفه فعلاً (مش قيمة افتراضية)
         try {
           const c = getPlaceCoords(text), probe = getPlaceCoords('zzzxqjw');
           if (Array.isArray(c) && Number.isFinite(c[0]) && Number.isFinite(c[1]) && !(probe && probe[0] === c[0] && probe[1] === c[1])) {
@@ -207,7 +198,7 @@ function createEngine(stations, links, isAdmin) {
     if (oi >= 0) {
       const beforeClean = clean(toks.slice(0, oi));
       const after = toks.slice(oi + 1);
-      if (beforeClean.length) return { origin: mk(after), dest: mk(beforeClean) };      // "رايح الحصري من الدقي"
+      if (beforeClean.length) return { origin: mk(after), dest: mk(beforeClean) };
       let best = null;
       for (let k = 1; k <= after.length; k++) {
         const left = clean(after.slice(0, k));
@@ -228,7 +219,6 @@ function createEngine(stations, links, isAdmin) {
       if (best) return { origin: best.o, dest: best.d };
       return { origin: mk(after), dest: null };
     }
-    // مفيش "من": دور على علامة وجهة
     let mi = -1;
     toks.forEach((t, i) => { if (MARK.has(t) && t !== 'ل') mi = i; });
     if (mi < 0) toks.forEach((t, i) => { if (t === 'ل') mi = i; });
@@ -278,8 +268,6 @@ function createEngine(stations, links, isAdmin) {
   const TAG_LABEL = { fast: 'الأسرع ⏱️', cheap: 'الأرخص 💰', direct: 'أقل تبديل 🎯' };
 
   const plan = (oRes, dRes) => {
-    // شبكة TfC محتاجة حساب بالـpatterns (ركوبة لكل خط). Beso لسه مش بيدعمها: رد واضح بدل "مفيش مسار"
-    if ([...oRes.candidates, ...dRes.candidates].some(c => String(c.st.id).startsWith('tfc_'))) return { unsupportedNetwork: true, options: [] };
     const targets = new Set(dRes.candidates.map(c => c.st.id));
     const sources = oRes.candidates.filter(c => !targets.has(c.st.id))
       .map(c => ({ id: c.st.id, init: (1 - c.score) * 15 + (c.extra || 0) }));
@@ -319,7 +307,7 @@ function createEngine(stations, links, isAdmin) {
 // ==ENGINE_END==
 
 // ---------------------------------------------------------------------
-// إرشادات بيسو المعتمدة (من الأدمن أو بعد تأييد مستخدمين كفاية)
+// إرشادات بيسو المعتمدة
 // ---------------------------------------------------------------------
 export const matchGuides = (guides, text) => {
   const qT = norm(text).split(' ').filter(Boolean).map(stem);
@@ -333,7 +321,6 @@ export const matchGuides = (guides, text) => {
   });
 };
 
-// الخطوط المباشرة اللي بتطلع من موقف (للعرض في كروت البحث بدل "مفيش داتا")
 export const stationConnections = (engine, stationId) => (engine.adj.get(stationId) || [])
   .map(e => ({
     station: engine.byId.get(e.to),
@@ -343,12 +330,6 @@ export const stationConnections = (engine, stationId) => (engine.adj.get(station
   .filter(x => x.station)
   .sort((a, b) => (a.fare ?? 99) - (b.fare ?? 99));
 
-// ---------------------------------------------------------------------
-// بحث ذكي واحد لكل التطبيق:
-//   kind: 'route'  → فيه (من) و(إلى) والمسار محسوب   { origin, dest, plan, guides }
-//   kind: 'places' → مكان/مواقف مطابقة                 { res, stations, guides }
-//   kind: 'none'   → ملقاش، ومعاه اقتراحات تصحيح       { suggestions, guides }
-// ---------------------------------------------------------------------
 export function smartSearch(engine, guides, text) {
   const g = matchGuides(guides, text);
   const parsed = engine.parse(text);
@@ -363,15 +344,11 @@ export function smartSearch(engine, guides, text) {
 export { createEngine, norm, tokenize, tokenMatch, stem, wantsPref };
 
 // =====================================================================
-//  2) هوك الداتا الحية من الأدمن بانل (مواقف + روابط + إرشادات) — استخدمه في شاشة البحث كمان
+//  2) هوك الداتا الحية من الأدمن بانل (مواقف + روابط + إرشادات)
 // =====================================================================
 export const GUIDES_COLLECTION = 'beso_knowledge_updates';
 
-// كل البارامترات اختيارية:
-//   stations / links / guides : لو مرّرتهم جاهزين (من App) بيستخدمهم بدل ما يفتح اشتراكات جديدة
-//   enabled=false             : يوقف الاشتراكات (لما المكوّن ياخد transit جاهز من فوق)
 export function useTransitData({ stations: stationsProp, links: linksProp, guides: guidesProp, isAdmin = false, enabled = true } = {}) {
-  const activeImport = useActiveImport();
   const [ownStations, setOwnStations] = useState([]);
   const [ownLinks, setOwnLinks] = useState([]);
   const [ownGuides, setOwnGuides] = useState([]);
@@ -383,17 +360,17 @@ export function useTransitData({ stations: stationsProp, links: linksProp, guide
   useEffect(() => {
     if (!useOwnStations) return undefined;
     const unsub = onSnapshot(collection(db, STATIONS_COLLECTION),
-      (snap) => { setOwnStations(gateDocs(snap.docs.map(d => ({ id: d.id, ...d.data() })), activeImport)); setLoading(false); },
+      (snap) => { setOwnStations(snap.docs.map(d => ({ id: d.id, ...d.data() }))); setLoading(false); },
       () => setLoading(false));
     return () => unsub();
-  }, [useOwnStations, activeImport]);
+  }, [useOwnStations]);
 
   useEffect(() => {
     if (!useOwnLinks) return undefined;
     const unsub = onSnapshot(collection(db, LINKS_COLLECTION),
-      (snap) => setOwnLinks(gateDocs(snap.docs.map(d => ({ id: d.id, ...d.data() })), activeImport)), () => setOwnLinks([]));
+      (snap) => setOwnLinks(snap.docs.map(d => ({ id: d.id, ...d.data() }))), () => setOwnLinks([]));
     return () => unsub();
-  }, [useOwnLinks, activeImport]);
+  }, [useOwnLinks]);
 
   useEffect(() => {
     if (!useOwnGuides) return undefined;
@@ -419,7 +396,7 @@ export function useTransitData({ stations: stationsProp, links: linksProp, guide
 // =====================================================================
 //  3) الحكمة الجماعية: اعتماد تلقائي للاقتراحات + تسجيل البحث الفاشل
 // =====================================================================
-export const AUTO_APPROVE_VOTES = 3;            // عدد المستخدمين المختلفين اللازم للاعتماد التلقائي
+export const AUTO_APPROVE_VOTES = 3;
 const GUIDES = 'beso_knowledge_updates';
 const MISSES = 'beso_search_misses';
 
@@ -431,7 +408,6 @@ const similarity = (a, b) => {
   return inter / (A.size + B.size - inter);
 };
 
-// guides = كل الإرشادات الحالية (من useTransitData)
 export async function submitGuideSuggestion({ guides = [], user, isAdmin, placeKeywords, info }) {
   const uid = user?.uid || null;
   const keywords = placeKeywords.trim(), text = info.trim();
@@ -446,7 +422,6 @@ export async function submitGuideSuggestion({ guides = [], user, isAdmin, placeK
     return { status: 'approved', votes: 1 };
   }
 
-  // لو في اقتراح مشابه (نفس المكان ومعلومات متقاربة) → ده تأييد له مش اقتراح جديد
   const existing = guides.find(g => g.status !== 'rejected' && keyOf(g.placeKeywords) === key && similarity(g.correctedInfo, text) >= 0.5);
   if (existing && uid) {
     const supporters = new Set([...(existing.supporters || []), existing.submittedBy].filter(Boolean));
@@ -469,7 +444,6 @@ export async function submitGuideSuggestion({ guides = [], user, isAdmin, placeK
   return { status: 'pending', votes: 1 };
 }
 
-// تسجيل بحث فاشل: العدّاد بيزيد مع كل شخص، والأدمن يشوف أكتر الأماكن المطلوبة
 export async function logSearchMiss(text, uid) {
   try {
     const q = norm(text);
@@ -485,7 +459,6 @@ export async function logSearchMiss(text, uid) {
 // =====================================================================
 //  4) واجهة شات بيسو
 // =====================================================================
-// الردود الحوارية الأساسية فقط (أي داتا مواصلات بتيجي من الخريطة الحية)
 const BESO_CONVERSATIONAL_INTENTS = [
   {
     id: 'greeting',
@@ -512,8 +485,6 @@ const BESO_CONVERSATIONAL_INTENTS = [
   }
 ];
 
-
-
 const KIND_ICON = { ride: '🚐', bus: '🚌', metro: '🚇', walk: '🚶', microbus: '🚐', taxi: '🚕' };
 const fareTxt = (e) => (e.fare == null ? 'أجرة غير مسجلة' : `${e.fare} ج`);
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
@@ -528,7 +499,6 @@ const locate = () => new Promise(resolve => {
 });
 locate.lastError = null;
 
-// رسالة مفهومة لسبب فشل تحديد الموقع
 const locErrorText = (code) => {
   if (code === 1) return 'إذن الموقع مرفوض. افتح إعدادات الموقع للمتصفح/التطبيق وفعّله، وبعدين اضغط "فعّل الموقع".';
   if (code === 2) return 'مش قادر أحدد موقعك. اتأكد إن الـ GPS شغال في الجهاز وجرب تاني.';
@@ -538,7 +508,6 @@ const locErrorText = (code) => {
   return 'مقدرتش أحدد موقعك. جرب تاني.';
 };
 
-// يعرض **نص** بخط عريض بدل ما تظهر النجوم
 const RichText = ({ text }) => String(text || '').split(/(\*\*[^*]+\*\*)/g).map((p, i) =>
   p.startsWith('**') && p.endsWith('**') && p.length > 4
     ? <strong key={i} className="font-black">{p.slice(2, -2)}</strong>
@@ -548,7 +517,7 @@ const RichText = ({ text }) => String(text || '').split(/(\*\*[^*]+\*\*)/g).map(
 const BesoAssistantModal = ({ stations = [], links: linksProp, transit: transitProp = null, isDarkMode, onClose, onSelectStation, userAreas = [], user, isAdmin, userLocation = null }) => {
   const [input, setInput] = useState('');
   const [isTyping, setIsTyping] = useState(false);
-  const [locStatus, setLocStatus] = useState('idle'); // idle | loading | ok | denied
+  const [locStatus, setLocStatus] = useState('idle');
   const [locError, setLocError] = useState(null);
 
   const [correctingMsgId, setCorrectingMsgId] = useState(null);
@@ -557,13 +526,57 @@ const BesoAssistantModal = ({ stations = [], links: linksProp, transit: transitP
   const [isSubmittingCorrection, setIsSubmittingCorrection] = useState(false);
   const [correctionSuccessMsg, setCorrectionSuccessMsg] = useState('');
 
-  // ذاكرة المحادثة (ref عشان نتفادى القيم القديمة داخل الـ async)
   const ctxRef = useRef({ pendingDest: null, pendingOrigin: null, last: null, userCoords: null });
 
-  // كل الداتا حية من لوحة الأدمن (مواقف + روابط + إرشادات) — أي تحديث بيوصل فوراً
-  // لو App مرّر transit جاهز بنستخدمه (من غير اشتراكات مكررة)، وإلا بنسحب بنفسنا
   const ownTransit = useTransitData({ stations, links: linksProp, isAdmin, enabled: !transitProp });
-  const { stations: approvedStations, guides: customGuides, engine } = transitProp || ownTransit;
+  const { net: tfcNet } = useTfc();
+
+  // دمج محطات وخطوط شبكة TfC المعرّبة مع الداتا الحية من لوحة الأدمن
+  const mergedTransit = useMemo(() => {
+    const base = transitProp || ownTransit;
+    if (!tfcNet) return base;
+
+    const tfcStations = [...tfcNet.stations.values()]
+      .filter(s => tfcNet.routesAt.has(s.id))
+      .map(s => ({
+        id: `tfc_${s.id}`,
+        name: stationLabel(s),
+        location: s.ar && s.name !== s.ar ? s.name : 'شبكة خطوط القاهرة الكبرى',
+        lat: s.lat,
+        lng: s.lng,
+        nodeType: (tfcNet.routesAt.get(s.id)?.size || 0) >= 4 ? 'hub' : 'stop',
+        status: 'approved'
+      }));
+
+    const tfcLinks = [];
+    tfcNet.patterns.forEach(p => {
+      for (let i = 0; i < p.stops.length - 1; i++) {
+        tfcLinks.push({
+          fromId: `tfc_${p.stops[i]}`,
+          toId: `tfc_${p.stops[i + 1]}`,
+          kind: 'ride',
+          fare: p.fare,
+          minutes: Math.max(1, Math.round((p.cum[i + 1] - p.cum[i]) || 3)),
+          note: `${p.name} (${p.type})`,
+          oneWay: true,
+          status: 'approved'
+        });
+      }
+    });
+
+    const allStations = [...base.stations, ...tfcStations];
+    const allLinks = [...base.links, ...tfcLinks];
+    const engine = createEngine(allStations, allLinks, !!isAdmin);
+
+    return {
+      ...base,
+      stations: allStations,
+      links: allLinks,
+      engine
+    };
+  }, [transitProp, ownTransit, tfcNet, isAdmin]);
+
+  const { stations: approvedStations, guides: customGuides, engine } = mergedTransit;
 
   const [messages, setMessages] = useState([
     {
@@ -582,7 +595,7 @@ const BesoAssistantModal = ({ stations = [], links: linksProp, transit: transitP
   ];
 
   // ------------------------------------------------------------------
-  // لوكيشن المستخدم: بيتاخد تلقائياً أول ما الشات يفتح (ويتجدد كل دقيقتين)
+  // لوكيشن المستخدم
   // ------------------------------------------------------------------
   const normalizeCoords = (v) => {
     if (!v) return null;
@@ -614,7 +627,7 @@ const BesoAssistantModal = ({ stations = [], links: linksProp, transit: transitP
           const perm = await navigator.permissions.query({ name: 'geolocation' });
           if (perm.state === 'denied') { if (!cancelled) { setLocError(1); setLocStatus('denied'); } return; }
         }
-      } catch (e) { /* بعض المتصفحات مش بتدعم permissions */ }
+      } catch (e) { /* ignore */ }
       if (!cancelled) await ensureCoords(true);
     })();
     return () => { cancelled = true; };
@@ -659,12 +672,6 @@ const BesoAssistantModal = ({ stations = [], links: linksProp, transit: transitP
       return { text: `🤔 **(${oLabel})** و **(${dLabel})** هما نفس النقطة أو قريبين جداً من بعض.\nجرب تحدد مكان أبعد شوية، أو قولي رايح فين بالظبط.`, stations: dRes.candidates.slice(0, 2).map(c => c.st) };
     }
 
-    if (planResult.unsupportedNetwork) {
-      return {
-        text: '🚧 النقطة دي من شبكة Transport for Cairo الجديدة، ومساعد بيسو لسه **مش بيدعمها**. مش هقولك "مفيش مسار" لأن ده مش صحيح بالضرورة.\n\n👈 استخدم **مخطط الرحلة** (اكتب رايح فين) عشان يحسب لك الخط بالتفصيل. الأجرة والوقت "غير معروف" لحد ما تتسجل.',
-        stations: []
-      };
-    }
     if (!planResult.options.length) {
       const oN = oRes.candidates.slice(0, 2).map(c => `**${c.st.name}**`).join(' أو ');
       const dN = dRes.candidates.slice(0, 2).map(c => `**${c.st.name}**`).join(' أو ');
@@ -719,7 +726,6 @@ const BesoAssistantModal = ({ stations = [], links: linksProp, transit: transitP
     const toks = nq.split(' ').filter(Boolean);
     const reply = (text, extra = {}) => ({ text, queryContext: queryText, ...extra });
 
-    // إرشادات الأدمن المعتمدة (بتتضاف على الإجابة، أو بترد لوحدها لو مفيش حاجة تانية)
     const guideBlock = (() => {
       const hits = matchGuides(customGuides, queryText);
       if (!hits.length) return '';
@@ -752,7 +758,7 @@ const BesoAssistantModal = ({ stations = [], links: linksProp, transit: transitP
       });
     }
 
-    // 2) "استخدم موقعي" (بعد ما بيسو يسأل عن مكانك)
+    // 2) "استخدم موقعي"
     if (/^(استخدم|حدد|خد|خذ)\s*موقعي( الحالي)?$|^(موقعي|مكاني) الحالي$/.test(nq)) {
       const c = await ensureCoords(true);
       if (!c) return reply(`😕 ${locErrorText(locate.lastError)}\nأو اكتبلي مكانك يدوي (مثال: **من الدقي**).`);
@@ -775,7 +781,7 @@ const BesoAssistantModal = ({ stations = [], links: linksProp, transit: transitP
       return reply(`🔄 **النقاط التبادلية مرتبة بعدد اتصالاتها (${hubs.length}):**\n\n${txt}${hubs.length > 12 ? `\n\n… و${hubs.length - 12} نقطة تانية.` : ''}`, { matchedStations: hubs.slice(0, 4) });
     }
 
-    // 4) الدردشة (بالمطابقة الكاملة للكلمة عشان "هايبر" ما تتفهمش "هاي")
+    // 4) الدردشة
     const padded = ` ${nq} `;
     const matchedIntent = BESO_CONVERSATIONAL_INTENTS.find(it => it.keywords.some(kw => padded.includes(` ${norm(kw)} `)));
     if (matchedIntent) {
@@ -789,7 +795,6 @@ const BesoAssistantModal = ({ stations = [], links: linksProp, transit: transitP
     // 5) متابعات: اعكس الاتجاه / أرخص / أسرع
     const pref = wantsPref(nq);
     const wantsFlip = /(اعكس|العكس|عكس|رجوع|ارجع|راجع)/.test(nq);
-    // "من موقعي" / "من هنا" → نقطة البداية هي لوكيشن المستخدم
     const myLocRe = /(^| )(من )?(موقعي الحالي|مكاني الحالي|موقعي|هنا)( |$)/;
     const useMyLoc = myLocRe.test(nq);
     const parsed = engine.parse(useMyLoc ? nq.replace(myLocRe, ' ').trim() : queryText);
@@ -823,7 +828,6 @@ const BesoAssistantModal = ({ stations = [], links: linksProp, transit: transitP
     }
     if (origin && dest) { ctx.pendingOrigin = null; ctx.pendingDest = null; }
 
-    // وجهة بس (أو "من موقعي"): ناخد لوكيشن المستخدم تلقائياً
     if (dest && !origin) {
       const myCoords = await ensureCoords();
       if (myCoords) {
@@ -842,9 +846,7 @@ const BesoAssistantModal = ({ stations = [], links: linksProp, transit: transitP
       });
     }
 
-    // بداية بس
     if (useMyLoc && !origin && !dest && place) {
-      // "من موقعي لـ X" اتفهمت X كمكان وحيد
       const myCoords = await ensureCoords();
       if (myCoords) return withGuide(await routeReply(await fromMyLocation(myCoords), place, pref));
     }
@@ -855,10 +857,8 @@ const BesoAssistantModal = ({ stations = [], links: linksProp, transit: transitP
       return withGuide(reply(`أنت في **(${engine.labelOf(origin)})** 👍\n\n${info.text}\n\nقولي بقى رايح فين عشان أحسبلك أسرع وأرخص طريق؟`, { matchedStations: info.stations }));
     }
 
-    // مسار كامل
     if (origin && dest) return withGuide(await routeReply(origin, dest, pref));
 
-    // اسم مكان واحد فقط → معلومات المكان
     if (place) {
       ctx.pendingOrigin = null;
       const info = describePlace(place);
@@ -871,7 +871,6 @@ const BesoAssistantModal = ({ stations = [], links: linksProp, transit: transitP
       suggestions: ['من الدقي لأكتوبر', 'النقاط التبادلية 🔄']
     });
 
-    // ---- دوال مساعدة داخلية ----
     function didYouMean(text, res) {
       const sug = (res && res.suggestions) || [];
       const sugTxt = sug.length ? `\n\nقصدك واحد من دول؟\n${sug.map(s => `• **${s.name}**`).join('\n')}` : '';
@@ -879,7 +878,6 @@ const BesoAssistantModal = ({ stations = [], links: linksProp, transit: transitP
     }
   };
 
-  // بيحوّل GPS لنقاط انطلاق (أقرب 3 نقاط + وقت مشي تقديري)
   const fromMyLocation = async (coords) => {
     const near = engine.nearestTo(coords, 3, 12);
     return {
@@ -890,7 +888,6 @@ const BesoAssistantModal = ({ stations = [], links: linksProp, transit: transitP
     };
   };
 
-  // بيحسب ويصيغ الرد ويحفظ آخر مسار للمتابعة
   const routeReply = async (oRes, dRes, pref) => {
     const ctx = ctxRef.current;
     if (!oRes?.candidates?.length || !dRes?.candidates?.length) {
